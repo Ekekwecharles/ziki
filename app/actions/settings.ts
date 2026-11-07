@@ -11,7 +11,8 @@ import { walletAddressSchema } from "@/lib/validations/issue";
 import { isAdmin } from "@/lib/roles";
 import { fromZodError, fieldError, type FieldErrorResult } from "@/lib/form-errors";
 import { appCookieOptions } from "@/lib/cookie-options";
-import { compare, hash } from "bcryptjs";
+import { hash } from "bcryptjs";
+import { confirmIdentity, WRONG_PASSWORD_MESSAGE } from "@/lib/two-factor";
 import { sendMail, smtpConfigured } from "@/lib/mail";
 import { logger } from "@/lib/logger";
 import { consumeAuthRateLimit, RATE_LIMIT_MESSAGE } from "@/lib/rate-limit";
@@ -31,7 +32,9 @@ export type AvatarResult = { error?: string; ok?: boolean; image?: string | null
 /**
  * Change a credentials password from Settings (#570). Updating sessionVersion
  * invalidates every issued JWT, including this one; the form then asks the
- * person to sign in again with their new password.
+ * person to sign in again with their new password. It re-authenticates with
+ * `confirmIdentity` (the current password, plus a `code` when two-factor is
+ * on) and revokes the owner's agent API keys, as a password reset does (#568).
  */
 export async function changePasswordAction(
   _prev: ChangePasswordResult | undefined,
@@ -57,18 +60,40 @@ export async function changePasswordAction(
     return { error: "Password changes are only available for password-based accounts." };
   }
 
-  if (!(await compare(parsed.data.currentPassword, account.passwordHash))) {
-    return {
-      error: "Your current password is incorrect.",
-      field: "currentPassword",
-      fieldErrors: { currentPassword: "Your current password is incorrect." },
-    };
+  // Fresh re-authentication, as the other security changes do (#568): the
+  // current password, and a code from the authenticator app or a backup code
+  // when two-factor is on, so a session left open can't change the password.
+  const code = formData.get("code");
+  const identity = await confirmIdentity(user.id, {
+    password: parsed.data.currentPassword,
+    code: typeof code === "string" ? code : undefined,
+  });
+  if (!identity.ok) {
+    if (identity.error === WRONG_PASSWORD_MESSAGE) {
+      return {
+        error: "Your current password is incorrect.",
+        field: "currentPassword",
+        fieldErrors: { currentPassword: "Your current password is incorrect." },
+      };
+    }
+    if (/code/i.test(identity.error)) {
+      return { error: identity.error, field: "code", fieldErrors: { code: identity.error } };
+    }
+    return { error: identity.error };
   }
 
   const passwordHash = await hash(parsed.data.password, 10);
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { passwordHash, sessionVersion: { increment: 1 } },
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: { id: user.id },
+      data: { passwordHash, sessionVersion: { increment: 1 } },
+    });
+    // Like a reset (#513): a changed password must not leave live agent keys
+    // behind. The agents stay, so the owner can regenerate a key from settings.
+    await tx.agentApiKey.updateMany({
+      where: { revokedAt: null, agent: { ownerUserId: user.id } },
+      data: { revokedAt: new Date() },
+    });
   });
 
   // Unlike reset links, this is an informational notice: only deliver it

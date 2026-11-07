@@ -176,6 +176,9 @@ export async function verifySecondFactor(
 
 export type ConfirmIdentityResult = { ok: true } | { ok: false; error: string };
 
+/** What `confirmIdentity` answers for a wrong password (a form can word it for its own field). */
+export const WRONG_PASSWORD_MESSAGE = "That password isn't right.";
+
 /**
  * Fresh re-authentication for a security change: the password, and the
  * current code when two-factor is on. Checked inside the change itself, never
@@ -191,7 +194,7 @@ export async function confirmIdentity(
   const limit = await consumeAuthRateLimit("login", { email: user.email });
   if (!limit.allowed) return { ok: false, error: "Too many attempts. Wait a few minutes and try again." };
   if (!password || !(await compare(password, user.passwordHash))) {
-    return { ok: false, error: "That password isn't right." };
+    return { ok: false, error: WRONG_PASSWORD_MESSAGE };
   }
 
   if (await isTwoFactorEnabled(userId)) {
