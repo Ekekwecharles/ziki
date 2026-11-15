@@ -20,7 +20,9 @@ const world = vi.hoisted(() => ({
   }>,
   /** What Stripe's transfers.create does next; a test sets it. */
   transfer: { create: async (_params: unknown, _options: { idempotencyKey: string }): Promise<{ id: string }> => ({ id: "tr_default" }) },
-  bug: { status: "open", payoutReleasedAt: null as Date | null, organisationId: "org", reporterId: "owner", isDeleted: false },
+  bug: { status: "open", payoutReleasedAt: null as Date | null, organisationId: "org", reporterId: "owner", isDeleted: false, reward: 1 },
+  /** How many planning-poker estimates the issue has; the funding floor only applies once there is one. */
+  estimates: 0,
 }));
 
 function matches(row: Record<string, unknown>, where: Where = {}): boolean {
@@ -65,6 +67,7 @@ const db = vi.hoisted(() => {
       findUnique: async () => ({ ...world.bug }),
       findUniqueOrThrow: async () => ({ ...world.bug }),
     },
+    rewardEstimate: { count: async () => world.estimates },
     membership: { findUnique: async () => null },
     user: { findUnique: async ({ where }: { where: { id: string } }) => ({ id: where.id }) },
     coinPurchase: {
@@ -126,7 +129,8 @@ beforeEach(() => {
   world.purchases.length = 0;
   world.withdrawals.length = 0;
   world.transfer.create = async () => ({ id: "tr_default" });
-  Object.assign(world.bug, { status: "open", payoutReleasedAt: null });
+  world.estimates = 0;
+  Object.assign(world.bug, { status: "open", payoutReleasedAt: null, reward: 1 });
 });
 
 describe("Ziks arithmetic", () => {
@@ -163,6 +167,30 @@ describe("funding an issue", () => {
     expect(await fundIssue("owner", "bug", 20, "request-0002")).toEqual({ funded: false, escrow: 20 });
     expect(await walletBalance(db as never, "owner")).toBe(30);
     expect(total()).toBe(50);
+  });
+
+  it("won't fund an estimated issue below its estimate, but lets the owner add more once it is reached", async () => {
+    await buy("owner", 500, "s7");
+    world.estimates = 3;
+    world.bug.reward = 6.33; // 63 Ziks
+
+    await expect(fundIssue("owner", "bug", 40, "request-0007")).rejects.toMatchObject({ code: "invalid_amount" });
+    expect(await walletBalance(db as never, "owner")).toBe(500);
+
+    expect(await fundIssue("owner", "bug", 63, "request-0008")).toEqual({ funded: true, escrow: 63 });
+    // At the estimate, any amount adds to it.
+    expect(await fundIssue("owner", "bug", 5, "request-0009")).toEqual({ funded: true, escrow: 68 });
+  });
+
+  it("asks for only what is missing when an issue is partly funded, and ignores the $1 default before anyone estimates", async () => {
+    await buy("owner", 500, "s8");
+    // Nobody has estimated: the $1 default is not a floor, so one Zik is fine.
+    expect(await fundIssue("owner", "bug", 1, "request-0010")).toEqual({ funded: true, escrow: 1 });
+
+    world.estimates = 2;
+    world.bug.reward = 5; // 50 Ziks, 1 already behind it
+    await expect(fundIssue("owner", "bug", 48, "request-0011")).rejects.toMatchObject({ code: "invalid_amount" });
+    expect(await fundIssue("owner", "bug", 49, "request-0012")).toEqual({ funded: true, escrow: 50 });
   });
 
   it("refuses someone who doesn't own the issue, and a finished issue", async () => {

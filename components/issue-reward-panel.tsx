@@ -32,7 +32,10 @@ export function IssueRewardPanel({
   viewerId,
   canEstimate,
   caption,
+  children,
 }: {
+  /** Drawn right under the amount, before the estimates: where the issue is funded (#ziki-coins). */
+  children?: React.ReactNode;
   bugId: string;
   reward: number;
   estimates: RewardEstimateView[];
@@ -75,10 +78,12 @@ export function IssueRewardPanel({
         <h2 id={`${id}-heading`} className="text-xs font-bold uppercase tracking-[0.08em] text-zk-muted">Reward</h2>
         {fixed ? <span className="text-xs text-zk-muted">Fixed</span> : null}
       </div>
-      <p className="m-0 flex items-baseline gap-2">
-        <span className="font-mono text-[28px] font-extrabold leading-none tabular-nums text-zk-text" data-testid="reward-amount">{formatZ(reward)}</span>
-        <span className="text-xs text-zk-muted">{caption ?? "paid to whoever solves it, once three people report it deployed"}</span>
+      <p className="m-0 flex items-center justify-center gap-5 py-2">
+        <span className="font-mono text-[32px] font-extrabold leading-none tabular-nums text-zk-text" data-testid="reward-amount">{formatZ(reward)}</span>
+        <span className="max-w-[40ch] text-xs leading-relaxed text-zk-muted">{caption ?? "paid to whoever solves it, once three people report it deployed"}</span>
       </p>
+
+      {children}
 
       {open ? (
         <form onSubmit={submit} aria-label="Your estimate" className="flex flex-col gap-2">

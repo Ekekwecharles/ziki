@@ -6,10 +6,10 @@ import { useRouter } from "next/navigation";
 import { fundIssueAction } from "@/app/actions/coins";
 
 /**
- * Fund an issue with Ziks (#ziki-coins). The request id is made when the box
- * first draws, so a double click or a retry funds once. What the issue pays
- * out, and to whom, is the same as its reward (lib/points/payout.ts): Ziki's
- * fee comes off, and what is left goes to the people who earned it.
+ * Fund an issue with Ziks (#ziki-coins), drawn inside the Reward card so the person who can fund it sees it with the
+ * estimate. The amount starts at what is still missing to reach the estimate and can't go below that; once the issue
+ * is funded to the estimate, any amount adds to it. The request id is made when the box first draws, so a double click
+ * or a retry funds once. Ziki's fee comes off when the issue pays out (lib/points/payout.ts).
  */
 export function FundIssueBox({
   bugId,
@@ -27,18 +27,22 @@ export function FundIssueBox({
 }) {
   const router = useRouter();
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
-  const [amount, setAmount] = useState("");
+  // What is still missing to reach the estimate: the least this issue can be funded with right now.
+  const toEstimate = estimate ? Math.max(0, estimate.zik - escrow) : 0;
+  const minimum = Math.max(1, toEstimate);
+  const [amount, setAmount] = useState(() => (toEstimate > 0 ? String(toEstimate) : ""));
   const [pending, startTransition] = useTransition();
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
   const value = Number(amount);
-  const valid = Number.isInteger(value) && value > 0 && value <= balance;
-  // What is still missing to reach the estimate, so "fund the estimate" never over-funds an issue that has some Ziks.
-  const toEstimate = estimate ? Math.max(0, estimate.zik - escrow) : 0;
+  const whole = amount !== "" && Number.isInteger(value) && value > 0;
+  const valid = whole && value >= minimum && value <= balance;
+  const shortBy = Math.max(0, minimum - balance);
 
-  const fund = (zik: number) => {
+  const fund = () => {
+    if (!valid) return;
     setNote(null);
     startTransition(async () => {
-      const result = await fundIssueAction(bugId, zik, requestId);
+      const result = await fundIssueAction(bugId, value, requestId);
       setNote({ ok: result.ok, text: result.ok ? result.message : result.error });
       if (result.ok) {
         setAmount("");
@@ -49,58 +53,57 @@ export function FundIssueBox({
   };
 
   return (
-    <section aria-labelledby={`fund-${bugId}`} className="rounded-[20px] border border-zk-border bg-zk-surface p-5 sm:p-[22px]">
-      <h2 id={`fund-${bugId}`} className="m-0 text-[11px] font-bold uppercase tracking-[0.08em] text-zk-muted">Ziks behind this issue</h2>
-      <p className="mb-0 mt-2 text-2xl font-extrabold tabular-nums text-zk-text">{escrow.toLocaleString("en-US")} <span className="text-sm font-medium text-zk-muted">{escrow === 1 ? "Zik" : "Ziks"} held</span></p>
-      <p className="mb-0 mt-1 text-sm text-zk-text2">Paid to the people who solve and review it once the work is reported live. Anything left when it closes goes back to whoever put it in.</p>
+    <div className="flex flex-col gap-5 rounded-2xl border border-zk-border bg-zk-chip px-5 py-5" data-testid="fund-issue">
+      <p className="m-0 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 pb-0.5">
+        <span className="text-xs font-bold uppercase tracking-[0.08em] text-zk-muted">Funded</span>
+        <span className="text-sm font-bold tabular-nums text-zk-text">
+          {escrow.toLocaleString("en-US")} <span className="font-medium text-zk-muted">{escrow === 1 ? "Zik" : "Ziks"} held</span>
+        </span>
+      </p>
       {estimate ? (
-        <p className="mb-0 mt-3 text-sm text-zk-text2">
-          Agents and people estimated this at <b className="text-zk-text">{estimate.usd}</b>, which is {estimate.zik.toLocaleString("en-US")} Ziks (the average of {estimate.count} {estimate.count === 1 ? "estimate" : "estimates"}).
-          {toEstimate === 0 ? " It is funded to that estimate." : ""}
+        <p className="m-0 text-xs text-zk-text2">
+          Estimate {estimate.usd}, {estimate.zik.toLocaleString("en-US")} Ziks, from {estimate.count} {estimate.count === 1 ? "estimate" : "estimates"}.
         </p>
       ) : null}
-      {canFund && estimate && toEstimate > 0 ? (
-        <button
-          type="button"
-          disabled={pending || toEstimate > balance}
-          onClick={() => fund(toEstimate)}
-          className="mt-3 inline-flex min-h-11 cursor-pointer items-center justify-center rounded-full border border-electric-blue-strong px-5 text-sm font-bold whitespace-nowrap text-electric-blue-strong transition hover:bg-zk-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {pending ? "Funding…" : escrow > 0 ? `Top up to the estimate: ${toEstimate.toLocaleString("en-US")} Ziks` : `Fund the estimate: ${toEstimate.toLocaleString("en-US")} Ziks`}
-        </button>
-      ) : null}
+
       {canFund ? (
         <form
-          className="mt-4 flex flex-wrap items-end gap-3"
+          className="flex flex-col gap-4"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!valid) return;
-            fund(value);
+            fund();
           }}
         >
-          <label className="flex flex-col gap-1 text-xs font-semibold text-zk-text2">
-            Ziks to add
+          <div className="flex items-center gap-2">
+            <label className="sr-only" htmlFor={`fund-${bugId}`}>Ziks to put behind this issue</label>
             <input
+              id={`fund-${bugId}`}
               inputMode="numeric"
               value={amount}
               onChange={(event) => setAmount(event.target.value.replace(/[^\d]/g, ""))}
-              placeholder="50"
-              className="h-11 w-32 rounded-full border border-zk-border bg-zk-surface px-4 text-sm font-semibold tabular-nums text-zk-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue"
+              placeholder={String(minimum)}
+              className="h-11 w-24 shrink-0 rounded-full border border-zk-border bg-zk-surface px-4 text-sm font-semibold tabular-nums text-zk-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue"
             />
-          </label>
-          <button
-            type="submit"
-            disabled={!valid || pending}
-            className="inline-flex min-h-11 cursor-pointer items-center justify-center rounded-full bg-electric-blue-strong px-5 text-sm font-bold whitespace-nowrap text-white transition hover:bg-[#2552af] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {pending ? "Funding…" : "Fund issue"}
-          </button>
-          <p className="m-0 w-full text-xs text-zk-muted">
-            You have {balance.toLocaleString("en-US")} {balance === 1 ? "Zik" : "Ziks"}. <Link href="/coins" className="font-semibold text-zk-accent hover:underline">Buy Ziks</Link>
+            <button
+              type="submit"
+              disabled={!valid || pending}
+              className="inline-flex min-h-11 flex-1 cursor-pointer items-center justify-center rounded-full bg-electric-blue-strong px-4 text-sm font-bold whitespace-nowrap text-white shadow-[0_8px_20px_rgba(46,111,239,0.30)] transition hover:bg-[#2552af] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 disabled:shadow-none"
+            >
+              {pending ? "Funding…" : valid ? `Fund ${value.toLocaleString("en-US")} ${value === 1 ? "Zik" : "Ziks"}` : "Fund issue"}
+            </button>
+          </div>
+          {whole && value < minimum ? (
+            <p className="m-0 text-xs font-semibold text-zk-warn-fg">The least you can fund is {minimum.toLocaleString("en-US")} {minimum === 1 ? "Zik" : "Ziks"}.</p>
+          ) : null}
+          <p className="m-0 mt-1 text-xs text-zk-muted">
+            You have {balance.toLocaleString("en-US")} {balance === 1 ? "Zik" : "Ziks"}.{" "}
+            <Link href="/coins" className="font-semibold text-zk-accent hover:underline">
+              {shortBy > 0 ? `Buy ${shortBy.toLocaleString("en-US")} more Ziks` : "Buy Ziks"}
+            </Link>
           </p>
         </form>
       ) : null}
-      {note ? <p role="status" className={`mb-0 mt-3 text-sm font-semibold ${note.ok ? "text-zk-ok-fg" : "text-zk-warn-fg"}`}>{note.text}</p> : null}
-    </section>
+      {note ? <p role="status" className={`m-0 text-sm font-semibold ${note.ok ? "text-zk-ok-fg" : "text-zk-warn-fg"}`}>{note.text}</p> : null}
+    </div>
   );
 }

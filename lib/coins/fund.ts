@@ -1,6 +1,7 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { CoinError, appendRows, assertAmount, assertCanSpend, escrowBalance, lockBug, lockUser } from "./ledger";
-import { MAX_FUND_ZIK } from "./math";
+import { MAX_FUND_ZIK, estimateToZik } from "./math";
 
 /**
  * Funding an issue (#ziki-coins). The owner moves Ziks from their wallet into
@@ -16,6 +17,15 @@ export async function canFundIssue(userId: string, bug: { organisationId: string
     select: { role: true },
   });
   return membership?.role === "owner" || membership?.role === "admin";
+}
+
+/** The estimate in Ziks, or 0 while nobody has estimated (the $1 every issue starts with isn't a judgement). */
+async function estimateFloor(tx: Pick<Prisma.TransactionClient, "bug" | "rewardEstimate">, bugId: string): Promise<number> {
+  const [issue, estimates] = await Promise.all([
+    tx.bug.findUniqueOrThrow({ where: { id: bugId }, select: { reward: true } }),
+    tx.rewardEstimate.count({ where: { bugId } }),
+  ]);
+  return estimates > 0 ? estimateToZik(Number(issue.reward)) : 0;
 }
 
 /** `requestId` makes a double click or a retry fund once. */
@@ -40,6 +50,11 @@ export async function fundIssue(userId: string, bugId: string, amount: number, r
     const key = `fund:${bugId}:${userId}:${requestId}`;
     if (await tx.coinEntry.findUnique({ where: { sourceKey: `${key}:wallet` }, select: { id: true } })) {
       return { funded: false, escrow: await escrowBalance(tx, bugId) };
+    }
+    // An issue can't be funded below what its estimate says it is worth. Once it is funded to the estimate, any amount adds to it.
+    const [floor, held] = await Promise.all([estimateFloor(tx, bugId), escrowBalance(tx, bugId)]);
+    if (held + amount < floor) {
+      throw new CoinError("invalid_amount", `Fund at least ${(floor - held).toLocaleString("en-US")} Ziks: the estimate for this issue is ${floor.toLocaleString("en-US")} Ziks.`);
     }
     await assertCanSpend(tx, userId, amount);
     await appendRows(tx, [
