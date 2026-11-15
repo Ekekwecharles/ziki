@@ -14,6 +14,7 @@ import { sweepUndraftedIdeas } from "@/lib/cron/draft-structuring";
 import { processSearchOutbox, pruneProcessedSearchOutbox } from "@/lib/search-index";
 import { refreshMergeQueue } from "@/lib/github/sync";
 import { sweepSecurityChecks } from "@/lib/security-checks/engine";
+import { retryPendingWithdrawals } from "@/lib/coins/withdraw";
 
 export const FAILURE_ALERT_THRESHOLD = 3;
 const consecutiveFailures = new Map<string, number>();
@@ -74,6 +75,7 @@ export type PlatformSweepsResult = {
       error?: string;
     };
     githubStatus: { status: "ok" | "error"; checked?: number; moved?: number; failed?: number; error?: string };
+    withdrawals: { status: "ok" | "error"; checked?: number; sent?: number; waiting?: number; returned?: number; error?: string };
     deliveries: { status: "ok" | "error"; processed?: number; error?: string };
     retention: {
       status: "ok" | "error";
@@ -118,6 +120,7 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
         orphanedIssues: { status: "ok" },
         draftStructuring: { status: "ok" },
         githubStatus: { status: "ok" },
+        withdrawals: { status: "ok" },
         deliveries: { status: "ok" },
         retention: { status: "ok" },
         searchIndex: { status: "ok" },
@@ -239,6 +242,16 @@ export async function runPlatformSweeps(): Promise<PlatformSweepsResult | { skip
     } catch (err) {
       recordSweepFailure("githubStatus", err);
       result.sweeps.githubStatus = { status: "error", error: err instanceof Error ? err.message : String(err) };
+    }
+
+    // 3b. Ziks withdrawals (#ziki-coins): send again the ones Stripe wasn't ready to pay yet.
+    try {
+      const res = await retryPendingWithdrawals();
+      recordSweepSuccess("withdrawals");
+      result.sweeps.withdrawals = { status: "ok", ...res };
+    } catch (err) {
+      recordSweepFailure("withdrawals", err);
+      result.sweeps.withdrawals = { status: "error", error: err instanceof Error ? err.message : String(err) };
     }
 
     // 4. Webhook Deliveries

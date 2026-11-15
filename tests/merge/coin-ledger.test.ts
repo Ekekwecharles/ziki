@@ -7,7 +7,19 @@ type Where = Record<string, unknown>;
 const world = vi.hoisted(() => ({
   rows: [] as Array<{ account: string; userId?: string | null; bugId?: string | null; kind: string; amount: number; sourceKey: string }>,
   purchases: [] as Array<{ stripeSessionId: string }>,
-  withdrawals: [] as Array<{ id: string; userId: string; zik: number; status: string }>,
+  withdrawals: [] as Array<{
+    id: string;
+    userId: string;
+    zik: number;
+    status: string;
+    amountCents?: number;
+    idempotencyKey?: string;
+    stripeTransferId?: string | null;
+    failureReason?: string | null;
+    createdAt?: Date;
+  }>,
+  /** What Stripe's transfers.create does next; a test sets it. */
+  transfer: { create: async (_params: unknown, _options: { idempotencyKey: string }): Promise<{ id: string }> => ({ id: "tr_default" }) },
   bug: { status: "open", payoutReleasedAt: null as Date | null, organisationId: "org", reporterId: "owner", isDeleted: false },
 }));
 
@@ -64,9 +76,20 @@ const db = vi.hoisted(() => {
     },
     withdrawal: {
       findUnique: async ({ where }: { where: { id: string } }) => world.withdrawals.find((w) => w.id === where.id) ?? null,
-      updateMany: async ({ where, data }: { where: { id: string; status: { in: string[] } }; data: { status: string } }) => {
-        const found = world.withdrawals.filter((w) => w.id === where.id && where.status.in.includes(w.status));
-        for (const w of found) w.status = data.status;
+      findMany: async ({ where }: { where: { status: string; createdAt: { lt: Date } } }) =>
+        world.withdrawals
+          .filter((w) => w.status === where.status && (w.stripeTransferId ?? null) === null && (w.createdAt ?? new Date(0)) < where.createdAt.lt)
+          .map((w) => ({ ...w, user: { stripeAccountId: "acct_fixer" } })),
+      updateMany: async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+        const found = world.withdrawals.filter((w) => {
+          const row = w as Record<string, unknown>;
+          return Object.entries(where).every(([key, want]) => {
+            if (want && typeof want === "object" && "in" in (want as object)) return ((want as { in: unknown[] }).in).includes(row[key]);
+            if (want === null) return (row[key] ?? null) === null;
+            return row[key] === want;
+          });
+        });
+        for (const w of found) Object.assign(w, data);
         return { count: found.length };
       },
     },
@@ -78,7 +101,10 @@ const db = vi.hoisted(() => {
 
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 vi.mock("@/lib/coins/stripe", () => ({
-  getStripe: () => ({ paymentIntents: { retrieve: async () => Promise.reject(new Error("offline")) } }),
+  getStripe: () => ({
+    paymentIntents: { retrieve: async () => Promise.reject(new Error("offline")) },
+    transfers: { create: (params: unknown, options: { idempotencyKey: string }) => world.transfer.create(params, options) },
+  }),
   stripeConfigured: () => true,
 }));
 
@@ -88,7 +114,8 @@ import { escrowBalance, walletBalance, walletSummary } from "@/lib/coins/ledger"
 import { feeOf, planRelease, splitByWeight } from "@/lib/coins/math";
 import { ledgerBalances } from "@/lib/coins/money";
 import { recordPurchase } from "@/lib/coins/purchase";
-import { failWithdrawal } from "@/lib/coins/withdraw";
+import Stripe from "stripe";
+import { failWithdrawal, retryPendingWithdrawals } from "@/lib/coins/withdraw";
 
 const buy = (userId: string, zik: number, session: string) =>
   db.coinEntry.createMany({ data: [{ account: "wallet", userId, kind: "purchase", amount: zik, sourceKey: `purchase:${session}` }] });
@@ -98,6 +125,7 @@ beforeEach(() => {
   world.rows.length = 0;
   world.purchases.length = 0;
   world.withdrawals.length = 0;
+  world.transfer.create = async () => ({ id: "tr_default" });
   Object.assign(world.bug, { status: "open", payoutReleasedAt: null });
 });
 
@@ -212,5 +240,57 @@ describe("withdrawals", () => {
     expect(await walletBalance(db as never, "fixer")).toBe(400);
     expect(world.withdrawals[0].status).toBe("failed");
     expect((await walletSummary(db as never, "fixer")).withdrawable).toBe(400);
+  });
+
+  describe("when Stripe is still holding the platform's money", () => {
+    const noFundsYet = () =>
+      Promise.reject(new Stripe.errors.StripeInvalidRequestError({ type: "invalid_request_error", code: "balance_insufficient", message: "insufficient available funds" }));
+    const debited = (id: string, createdAt: Date) => {
+      world.withdrawals.push({ id, userId: "fixer", zik: 450, amountCents: 4500, status: "pending", idempotencyKey: `key-${id}`, stripeTransferId: null, createdAt });
+      return db.coinEntry.createMany({
+        data: [
+          { account: "wallet", userId: "fixer", kind: "release", amount: 450, sourceKey: `release:${id}:fixer:wallet` },
+          { account: "wallet", userId: "fixer", kind: "withdrawal", amount: -450, sourceKey: `withdrawal:${id}` },
+        ],
+      });
+    };
+    const now = new Date("2026-11-15T12:00:00Z");
+    const minutesAgo = (minutes: number) => new Date(now.getTime() - minutes * 60_000);
+
+    it("keeps the withdrawal waiting with the Ziks reserved, then sends it once the money is available", async () => {
+      await debited("w3", minutesAgo(10));
+      const usedKeys: string[] = [];
+      world.transfer.create = (_params, options) => {
+        usedKeys.push(options.idempotencyKey);
+        return noFundsYet();
+      };
+
+      expect(await retryPendingWithdrawals(now)).toMatchObject({ checked: 1, waiting: 1, sent: 0, returned: 0 });
+      expect(world.withdrawals[0].status).toBe("pending");
+      expect(await walletBalance(db as never, "fixer")).toBe(0);
+
+      world.transfer.create = async (_params, options) => {
+        usedKeys.push(options.idempotencyKey);
+        return { id: "tr_1" };
+      };
+      expect(await retryPendingWithdrawals(now)).toMatchObject({ checked: 1, sent: 1, waiting: 0 });
+      expect(world.withdrawals[0].stripeTransferId).toBe("tr_1");
+      // Stripe would replay the refusal for the first key, so the second try used a new one.
+      expect(usedKeys[1]).not.toBe(usedKeys[0]);
+
+      // Sent once: nothing left to retry.
+      expect(await retryPendingWithdrawals(now)).toMatchObject({ checked: 0 });
+    });
+
+    it("doesn't touch a withdrawal made moments ago, and gives the Ziks back after two weeks of waiting", async () => {
+      await debited("w4", minutesAgo(0.5));
+      world.transfer.create = noFundsYet;
+      expect(await retryPendingWithdrawals(now)).toMatchObject({ checked: 0 });
+
+      world.withdrawals[0].createdAt = new Date(now.getTime() - 15 * 24 * 60 * 60 * 1000);
+      expect(await retryPendingWithdrawals(now)).toMatchObject({ checked: 1, returned: 1 });
+      expect(world.withdrawals[0].status).toBe("failed");
+      expect(await walletBalance(db as never, "fixer")).toBe(450);
+    });
   });
 });

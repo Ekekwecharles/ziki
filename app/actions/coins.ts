@@ -85,7 +85,11 @@ export async function withdrawZiksAction(): Promise<CoinActionResult> {
     const outcome = await withdrawEarned(user.id);
     revalidatePath("/coins");
     if (outcome.status === "failed") return { ok: false, error: "Stripe couldn't send the money. Your Ziks are back in your wallet." };
-    return { ok: true, message: `Sending $${(outcome.amountCents / 100).toFixed(2)} to your Stripe account.` };
+    const amount = `$${(outcome.amountCents / 100).toFixed(2)}`;
+    if (outcome.waiting) {
+      return { ok: true, message: `Your ${amount} is queued. Stripe is still releasing the money from recent payments, so it will be sent automatically, usually within a few days.` };
+    }
+    return { ok: true, message: `Sending ${amount} to your Stripe account.` };
   } catch (error) {
     return failure(error);
   }

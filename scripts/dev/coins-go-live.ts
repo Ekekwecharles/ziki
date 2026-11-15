@@ -30,7 +30,8 @@ async function main() {
     }
     const outcome = await holdPayout(tx, bug.id, solver ? [solver] : []);
     console.log(outcome.paid ? "Paid out." : `Held, waiting for more deployment reports (${outcome.held} award(s)).`);
-  });
+    // A hosted database is a round trip away from a laptop; Prisma's 5 s default is too short for this many writes.
+  }, { timeout: 120_000, maxWait: 30_000 });
 }
 
 main()

@@ -74,7 +74,17 @@ export async function recordAccountUpdate(account: Stripe.Account): Promise<void
   await prisma.user.updateMany({ where: { stripeAccountId: account.id }, data: { payoutsEnabled: accountCanReceive(account) } });
 }
 
-export type WithdrawOutcome = { withdrawalId: string; zik: number; amountCents: number; status: "pending" | "failed" };
+/** `waiting`: Stripe hasn't released enough of the platform's own money yet; the transfer is retried by itself. */
+export type WithdrawOutcome = { withdrawalId: string; zik: number; amountCents: number; status: "pending" | "failed"; waiting?: boolean };
+
+/** How long a withdrawal waits for Stripe to release funds before the Ziks go back to the person's wallet. */
+export const WITHDRAWAL_WAIT_DAYS = 14;
+/** A withdrawal is not retried until it is this old, so the sweep never races the request that created it. */
+const RETRY_AFTER_MS = 2 * 60 * 1000;
+
+function isBalanceInsufficient(error: unknown): boolean {
+  return error instanceof Stripe.errors.StripeError && error.code === "balance_insufficient";
+}
 
 /**
  * Withdraws everything the person can: their earned Ziks (not ones they
@@ -125,9 +135,48 @@ export async function sendTransfer(
     if (error instanceof Stripe.errors.StripeConnectionError) {
       return { withdrawalId: withdrawal.id, zik: withdrawal.zik, amountCents: withdrawal.amountCents, status: "pending" };
     }
+    // Card payments are held by Stripe for a few days before they can be sent on. That is a delay, not a refusal:
+    // the Ziks stay reserved and the sweep tries again. Nothing was created, so the next try takes a fresh key
+    // (Stripe would otherwise replay this same error for the old one).
+    if (isBalanceInsufficient(error)) {
+      await prisma.withdrawal.updateMany({
+        where: { id: withdrawal.id, status: "pending", stripeTransferId: null, idempotencyKey: withdrawal.idempotencyKey },
+        data: { idempotencyKey: `ziki-withdrawal-${crypto.randomUUID()}`, failureReason: "Waiting for Stripe to release funds." },
+      });
+      return { withdrawalId: withdrawal.id, zik: withdrawal.zik, amountCents: withdrawal.amountCents, status: "pending", waiting: true };
+    }
     await failWithdrawal(withdrawal.id, error instanceof Error ? error.message : "The transfer failed.");
     return { withdrawalId: withdrawal.id, zik: withdrawal.zik, amountCents: withdrawal.amountCents, status: "failed" };
   }
+}
+
+/**
+ * The sweep (#ziki-coins): sends again every withdrawal that has been debited but not yet sent, because Stripe was
+ * still holding the platform's funds (or the connection dropped). One that has waited past WITHDRAWAL_WAIT_DAYS is
+ * given up and its Ziks go back to the wallet. Safe to run any number of times at once: a transfer is made at most
+ * once per idempotency key, and the transfer id is recorded once.
+ */
+export async function retryPendingWithdrawals(now: Date = new Date()): Promise<{ checked: number; sent: number; waiting: number; returned: number }> {
+  const waiting = await prisma.withdrawal.findMany({
+    where: { status: "pending", stripeTransferId: null, createdAt: { lt: new Date(now.getTime() - RETRY_AFTER_MS) } },
+    orderBy: { createdAt: "asc" },
+    take: 50,
+    select: { id: true, userId: true, zik: true, amountCents: true, idempotencyKey: true, createdAt: true, user: { select: { stripeAccountId: true } } },
+  });
+  const tally = { checked: waiting.length, sent: 0, waiting: 0, returned: 0 };
+  const giveUpBefore = now.getTime() - WITHDRAWAL_WAIT_DAYS * 24 * 60 * 60 * 1000;
+  for (const withdrawal of waiting) {
+    if (!withdrawal.user.stripeAccountId || withdrawal.createdAt.getTime() < giveUpBefore) {
+      const reason = withdrawal.user.stripeAccountId ? `Stripe could not send this within ${WITHDRAWAL_WAIT_DAYS} days.` : "The payout account was removed.";
+      if (await failWithdrawal(withdrawal.id, reason)) tally.returned += 1;
+      continue;
+    }
+    const outcome = await sendTransfer(withdrawal, withdrawal.user.stripeAccountId);
+    if (outcome.status === "failed") tally.returned += 1;
+    else if (outcome.waiting) tally.waiting += 1;
+    else tally.sent += 1;
+  }
+  return tally;
 }
 
 /** Stripe's `transfer.created`: the money is on its way to the person's account. */
