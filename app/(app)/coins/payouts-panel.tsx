@@ -39,8 +39,8 @@ export function PayoutsPanel({
       <div>
         <p className="m-0 text-sm text-zk-text2">
           {hasAccount
-            ? "Finish setting up your payout account with Stripe to withdraw what you earn."
-            : "Connect a payout account with Stripe once. After that you can withdraw what you earn."}
+            ? "Finish adding your bank details with Stripe to withdraw what you earn."
+            : "Add your bank account through Stripe, once. After that you can withdraw what you earn straight to it."}
         </p>
         <form action={setUpPayoutsAction} className="mt-4">
           <button type="submit" className={PRIMARY}>{hasAccount ? "Finish payout setup" : "Set up payouts"}</button>
@@ -55,13 +55,13 @@ export function PayoutsPanel({
         <div role="status" className="mb-4 rounded-2xl bg-zk-chip px-4 py-3 text-sm text-zk-text">
           <p className="m-0 font-bold">Withdrawal pending: {inFlight.usd}</p>
           <p className="m-0 mt-1 text-zk-text2">
-            {inFlight.sent ? "It's on its way to your Stripe account." : "We'll send it to your Stripe account automatically, usually within a few days."}
+            {inFlight.sent ? "It's on its way to your bank account." : "We'll send it to your bank account automatically, usually within a few days."}
           </p>
         </div>
       ) : null}
       <p className="m-0 text-sm text-zk-text2">
         {canWithdraw
-          ? `You can withdraw ${withdrawable.toLocaleString("en-US")} Ziks, ${withdrawableUsd}, to your Stripe account.`
+          ? `You can withdraw ${withdrawable.toLocaleString("en-US")} Ziks, ${withdrawableUsd}, to your bank account.`
           : `Withdrawals open at $${thresholdUsd} of earned Ziks. You have ${withdrawableUsd} so far.`}
       </p>
       <button

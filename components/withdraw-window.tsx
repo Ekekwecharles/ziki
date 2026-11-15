@@ -133,7 +133,7 @@ export function WithdrawWindow({ earned, organisationId, className, children }: 
             </button>
           </div>
           <p className="mt-1 text-sm text-zk-text2">
-            {ready ? "Your money is ready. Set up payouts on your Ziks page, then withdraw it to your Stripe account." : `You have ${money(available)}. ${money(left)} to go.`}
+            {ready ? "Your money is ready. Set up payouts on your Ziks page, then withdraw it to your bank account." : `You have ${money(available)}. ${money(left)} to go.`}
           </p>
 
           <p className="mt-5 flex flex-wrap items-baseline gap-x-2">

@@ -87,9 +87,9 @@ export async function withdrawZiksAction(): Promise<CoinActionResult> {
     if (outcome.status === "failed") return { ok: false, error: "Stripe couldn't send the money. Your Ziks are back in your wallet." };
     const amount = `$${(outcome.amountCents / 100).toFixed(2)}`;
     if (outcome.waiting) {
-      return { ok: true, message: `Withdrawal pending: ${amount}. We'll send it to your Stripe account automatically, usually within a few days.` };
+      return { ok: true, message: `Withdrawal pending: ${amount}. We'll send it to your bank account automatically, usually within a few days.` };
     }
-    return { ok: true, message: `Sending ${amount} to your Stripe account.` };
+    return { ok: true, message: `Sending ${amount} to your bank account.` };
   } catch (error) {
     return failure(error);
   }
