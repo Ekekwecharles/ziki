@@ -20,7 +20,17 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   // No PDF before the report is posted: the page shows progress until then.
   if (!report.posted) redirect(`/security/checks/${report.checkId}`);
 
-  const pdf = await renderReportPdf(report);
+  let pdf: Buffer;
+  try {
+    pdf = await renderReportPdf(report);
+  } catch (error) {
+    // Say what failed in the server log (a bare 500 says nothing) and in plain words to the person.
+    console.error(`[report.pdf] check ${report.checkId}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+    return new Response("We couldn't make the PDF just now. Please try again in a minute.", {
+      status: 500,
+      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "private, no-store" },
+    });
+  }
   const name = report.target.input.replace(/^https?:\/\//, "").replace(/[^a-zA-Z0-9.-]+/g, "-").slice(0, 60);
   return new Response(new Uint8Array(pdf), {
     headers: {

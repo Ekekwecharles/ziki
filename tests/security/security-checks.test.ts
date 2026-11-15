@@ -311,6 +311,21 @@ describe("what a client sees of a check (12 and 14 Nov plans, part S)", () => {
     expect(renderReportPdf).not.toHaveBeenCalled();
   });
 
+  it("PDF: when the PDF can't be made, the cause goes to the server log and the person gets a plain message, not an empty 500", async () => {
+    const params = { params: Promise.resolve({ id: "check1" }) };
+    db.securityCheck.findFirst.mockResolvedValue(check());
+    results([row("crit", "critical", 1)]);
+    renderReportPdf.mockRejectedValue(new Error("font file missing"));
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await downloadReportPdf(new Request("http://localhost/x"), params);
+
+    expect(response.status).toBe(500);
+    expect(await response.text()).toContain("couldn't make the PDF");
+    expect(logged.mock.calls.join(" ")).toContain("font file missing");
+    logged.mockRestore();
+  });
+
   it("PDF: prints ₦ and Yoruba in the site's font (Inter), embedded, not Helvetica", async () => {
     const { renderReportPdf: render } = await vi.importActual<typeof import("@/components/security-checks/report-pdf")>(
       "@/components/security-checks/report-pdf",
