@@ -19,17 +19,28 @@ import { getStripe } from "./stripe";
 export const WITHDRAW_MIN_ZIK = Math.ceil((WITHDRAW_THRESHOLD * 100) / zikToCents(1));
 
 /** Starts (or resumes) Stripe's hosted onboarding and returns the page to send the person to. */
+/** The country payout accounts are opened in (two letters). It must be one Stripe supports for the platform's own country. */
+function payoutCountry(): string {
+  return process.env.ZIKI_PAYOUT_COUNTRY?.trim().toUpperCase() || "US";
+}
+
 export async function startPayoutOnboarding(userId: string, email: string | undefined): Promise<string> {
   const stripe = getStripe();
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { stripeAccountId: true } });
   let accountId = user.stripeAccountId;
   if (!accountId) {
+    // Stripe collects the person's details on its hosted onboarding and carries the losses, which is the only shape
+    // a platform with Stripe-managed risk may create (the older `type: "express"` is refused there).
     const account = await stripe.accounts.create({
-      type: "express",
+      country: payoutCountry(),
       email,
-      capabilities: { transfers: { requested: true } },
-      // Ziki pays out to people in many countries; a recipient account can receive transfers from a platform anywhere.
-      tos_acceptance: { service_agreement: "recipient" },
+      controller: {
+        stripe_dashboard: { type: "none" },
+        fees: { payer: "application" },
+        losses: { payments: "stripe" },
+        requirement_collection: "stripe",
+      },
+      capabilities: { transfers: { requested: true }, card_payments: { requested: true } },
       metadata: { userId },
     });
     accountId = account.id;

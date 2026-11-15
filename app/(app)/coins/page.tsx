@@ -8,6 +8,7 @@ import { ZIK_PACKS, formatUsd, formatZik, zikToCents } from "@/lib/coins/math";
 import { stripeConfigured } from "@/lib/coins/stripe";
 import { WITHDRAW_MIN_ZIK, syncPayoutsEnabled } from "@/lib/coins/withdraw";
 import { LocalTime } from "@/components/local-time";
+import { UrlNotice } from "@/components/coins/url-notice";
 import { PayoutsPanel } from "./payouts-panel";
 
 export const metadata = { title: "Ziks" };
@@ -68,7 +69,7 @@ export default async function CoinsPage({ searchParams }: { searchParams?: Promi
           {account.payoutsEnabled ? "Payouts are set up." : "Stripe still needs a few details before you can withdraw."}
         </p>
       ) : null}
-      {query.error ? <p role="alert" className="m-0 rounded-2xl bg-zk-warn-bg px-4 py-3 text-sm font-semibold text-zk-warn-fg">{query.error}</p> : null}
+      {query.error ? <UrlNotice role="alert" className="m-0 rounded-2xl bg-zk-warn-bg px-4 py-3 text-sm font-semibold text-zk-warn-fg">{query.error}</UrlNotice> : null}
 
       <div className="grid gap-5 md:grid-cols-2">
         <section aria-labelledby="wallet" className={`${card} bg-[linear-gradient(160deg,var(--color-zk-surface)_60%,var(--color-zk-tint))]`}>
@@ -113,7 +114,7 @@ export default async function CoinsPage({ searchParams }: { searchParams?: Promi
                 <button
                   type="submit"
                   disabled={!configured}
-                  className="inline-flex min-h-11 w-full items-center justify-center rounded-full border border-zk-border bg-zk-surface px-4 text-sm font-bold text-zk-text transition hover:bg-zk-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex min-h-11 w-full cursor-pointer items-center justify-center rounded-full border border-zk-border bg-zk-surface px-4 text-sm font-bold text-zk-text transition hover:bg-zk-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Buy for {formatUsd(zikToCents(pack.zik))}
                 </button>

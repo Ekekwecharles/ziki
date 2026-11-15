@@ -19,6 +19,12 @@ export type CoinActionResult = { ok: true; message: string } | { ok: false; erro
 function failure(error: unknown): CoinActionResult {
   if (error instanceof CoinError) return { ok: false, error: error.message };
   console.error("[coins]", error);
+  // Stripe says what it refused (for example, that Connect isn't switched on); that is safe to show and useful to read.
+  // Authentication errors are left out: their text can quote part of a key.
+  if (error && typeof error === "object" && (error as { type?: string }).type === "StripeInvalidRequestError") {
+    const message = (error as { message?: string }).message;
+    if (message) return { ok: false, error: message };
+  }
   return { ok: false, error: "Something went wrong. Try again in a moment." };
 }
 
