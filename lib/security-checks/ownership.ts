@@ -379,14 +379,15 @@ async function workspaceInstallations(organisationId: string): Promise<{ githubI
  * Mark a target proven and let its checks start: `verifiedAt` and
  * `ownershipMethod` are set once (a target already proven keeps its first
  * proof), and its checks waiting for proof move to `queued`, where part 3
- * picks them up. Returns the check the client goes on to pay or skip.
+ * picks them up. Returns the check the client goes on to, and every check
+ * now queued for the target, so the caller can start them at once.
  */
 export async function recordOwnership(
   targetId: string,
   organisationId: string,
   userId: string,
   method: OwnershipMethod,
-): Promise<{ checkId: string | null }> {
+): Promise<{ checkId: string | null; queued: string[] }> {
   return prisma.$transaction(async (tx) => {
     await tx.securityTarget.updateMany({
       where: { id: targetId, organisationId, verifiedAt: null },
@@ -402,6 +403,10 @@ export async function recordOwnership(
       orderBy: { createdAt: "desc" },
       select: { id: true },
     });
-    return { checkId: open?.id ?? null };
+    const queued = await tx.securityCheck.findMany({
+      where: { targetId, organisationId, status: "queued" },
+      select: { id: true },
+    });
+    return { checkId: open?.id ?? null, queued: queued.map((check) => check.id) };
   });
 }

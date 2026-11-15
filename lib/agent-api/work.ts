@@ -49,6 +49,8 @@ import { contestsIn, liveStakesOf, sweepStakes } from "@/lib/agent-api/stakes";
 import { STAKE_REFRESH_MS } from "@/lib/stake-rules";
 import { eventStreamBus, ORGANISATION_WRITE, type StreamEvent } from "@/lib/events/stream-bus";
 import { activeLevels, levelIn } from "@/lib/agents/active-in";
+import { cardBugSelect, checkInfo, checksFor, judgementProof, loadProofRules } from "@/lib/proof";
+import { BIDDING_SUBSTATUSES } from "@/lib/issue-substatus";
 
 /**
  * One list of everything an agent can do in a project (#work-feed).
@@ -108,7 +110,8 @@ export type WorkKind =
   | "reconcile_merged"
   | "await_release"
   | "repair_pull_request"
-  | "report_pr_status";
+  | "report_pr_status"
+  | "add_test";
 
 export type WorkAction = {
   name: string;
@@ -268,9 +271,9 @@ export type ProjectWork = {
   /** Converted issues still being confirmed. */
   toConfirm: (IssueRef & { confirmations: number; needed: number; confirmed: boolean })[];
   ideaThreshold: number;
-  tests: (IssueRef & { pullRequestUrl: string | null })[];
+  tests: (IssueRef & { pullRequestUrl: string | null; forceMerged?: boolean })[];
   /** `importance` is the issue's importance (#importance). */
-  ready: (IssueRef & { importance: number })[];
+  ready: (IssueRef & { importance: number; broken?: boolean })[];
   /** Open bids on Open issues, for other agents to vote on (#bid-votes). */
   bids: OpenBid[];
   /** Open issues nobody holds, for investigation comments: who filed them and who already commented (#comment-votes). */
@@ -464,8 +467,8 @@ async function buildProjectWork(organisationId: string, project: FeedProject, tr
     judgeBlocks,
     toConfirm,
     ideaThreshold: workflow.ideaThreshold,
-    tests: tests.map((t) => ({ id: t.id, number: t.number, title: t.title, pullRequestUrl: t.pullRequestUrl ?? null })),
-    ready: ready.map((r) => ({ id: r.id, number: r.number, title: r.title, importance: r.voteCount })),
+    tests: tests.map((t) => ({ id: t.id, number: t.number, title: t.title, pullRequestUrl: t.pullRequestUrl ?? null, ...(t.forceMerged ? { forceMerged: true } : {}) })),
+    ready: ready.map((r) => ({ id: r.id, number: r.number, title: r.title, importance: r.voteCount, ...(r.substatus === "merged_broken" ? { broken: true } : {}) })),
     bids,
     toAward,
     toInvestigate,
@@ -741,7 +744,7 @@ async function closableIssues(organisationId: string, projectId: string, thresho
 /** Open bids (not awarded, not withdrawn, from agents not revoked) on Open issues, oldest first (#bid-votes). */
 async function openBids(organisationId: string, projectId: string, managerVoteWeight: number, offerWindowSeconds: number, track: WorkTrack = "product"): Promise<OpenBid[]> {
   const rows = await prisma.issueBid.findMany({
-    where: { ...OPEN_BID_WHERE, bug: { organisationId, projectId, ...trackFilter(track), isDeleted: false, substatus: { in: ["open", "requires_confirmation"] } } },
+    where: { ...OPEN_BID_WHERE, bug: { organisationId, projectId, ...trackFilter(track), isDeleted: false, substatus: { in: [...BIDDING_SUBSTATUSES] } } },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     select: {
       id: true,
@@ -952,8 +955,9 @@ async function loadFacts(ids: string[]): Promise<Map<string, IssueFacts>> {
       assigneeId: true,
       createdByAgentId: true,
       pullRequestUrl: true,
+      outsideWork: { select: { agentId: true } },
       createdByAgent: { select: { ownerUserId: true } },
-      claims: { select: { status: true, releasedAt: true, beneficiaryUserId: true, agentId: true, dispatcherUserId: true, agent: { select: { ownerUserId: true } } } },
+      claims: { select: { status: true, releasedAt: true, releaseReason: true, beneficiaryUserId: true, agentId: true, dispatcherUserId: true, agent: { select: { ownerUserId: true } } } },
       deliveries: { select: { pullRequestUrl: true, agentId: true } },
       confirmations: { where: { undoneAt: null }, select: { updatedAt: true, onBehalfOfUserId: true, weightClass: true } },
       revisions: { orderBy: { editedAt: "desc" }, take: 1, select: { editedAt: true } },
@@ -969,8 +973,11 @@ async function loadFacts(ids: string[]): Promise<Map<string, IssueFacts>> {
         assigneeId: bug.assigneeId,
         createdByAgentId: bug.createdByAgentId,
         createdByAgent: bug.createdByAgent,
+        outsideWork: bug.outsideWork,
         pullRequestUrl: bug.pullRequestUrl,
-        claims: bug.claims,
+        // #force-merge: the claim a force-merged fix was done under is released at the merge, but its agent still
+        // stands where the holder does, so it isn't asked to judge or report on its own work.
+        claims: bug.claims.map(({ releaseReason, ...claim }) => (releaseReason === "force_merge" ? { ...claim, status: "active", releasedAt: null } : claim)),
         // An entry given before the latest edit no longer counts, so its giver is asked again.
         confirmerOwners: bug.confirmations
           .filter((c) => !bug.revisions[0] || c.updatedAt > bug.revisions[0].editedAt)
@@ -1014,7 +1021,29 @@ async function agentWork(agent: AgentContext, projectId: string, offerWindowSeco
     where: { agentId: agent.agentId, status: "planning", releasedAt: null, bug: { projectId } },
     select: { id: true, offeredAt: true, createdAt: true, bug: { select: { id: true, number: true, title: true } }, plan: { select: { id: true, round: true, decision: true, reviewBy: true, decisionNote: true } } },
   });
-  return { offers, reviewOffers, jobReviewOffers, claims, unread, planning };
+  // #deeper-testing: this agent's good-to-merge judgements that don't count yet for want of proof,
+  // and the automated tests testers asked it for on work it delivered.
+  const [judged, testsToAdd] = await Promise.all([
+    track === "marketing"
+      ? Promise.resolve([])
+      : prisma.testVerdict.findMany({
+          where: { agentId: agent.agentId, goodToMerge: true, bug: { projectId, status: "done", isDeleted: false } },
+          select: { goodToMerge: true, headSha: true, proof: true, pullRequestUrl: true, bug: { select: cardBugSelect } },
+        }),
+    prisma.testCardRow.findMany({
+      where: { route: "ci", proofAttachmentId: null, bug: { projectId, isDeleted: false, deliveries: { some: { agentId: agent.agentId } } } },
+      select: { id: true, text: true, bug: { select: { id: true, number: true, title: true } } },
+    }),
+  ]);
+  const rules = judged.length ? await loadProofRules(prisma, agent.organisationId) : null;
+  const unproven = new Map<string, string[]>();
+  for (const verdict of judged) {
+    if (!rules || verdict.pullRequestUrl !== verdict.bug.pullRequestUrl) continue;
+    const checks = checksFor(rules, verdict.bug);
+    const { state, missing } = judgementProof(verdict, checks.required, verdict.bug.pullRequestHeadSha);
+    if (checks.on && state === "no_proof") unproven.set(verdict.bug.id, missing.map((id) => checkInfo(id, rules)?.name ?? id));
+  }
+  return { offers, reviewOffers, jobReviewOffers, claims, unread, planning, unproven, testsToAdd };
 }
 
 const apiPath = (id: string, tail: string, projectId: string) => `/api/v1/issues/${id}/${tail}?projectId=${projectId}`;
@@ -1273,21 +1302,52 @@ export function itemsFor(agent: AgentContext, work: ProjectWork, mine: AgentWork
   }
 
   // 4. Fixes to test, then issues to take.
+  const unproven = mine.unproven;
   for (const test of work.tests) {
     if (!independent(test.id)) continue;
     const facts = work.facts.get(test.id);
     // One judgement per person per class (#owner-agents): the owner's agent of the other class may still judge.
     const mine = verdictClass(agent.level);
-    if (facts?.testerOwners.some((v) => v.ownerUserId === owner && v.verdictClass === mine && v.pullRequestUrl === test.pullRequestUrl)) continue;
+    if (facts?.testerOwners.some((v) => v.ownerUserId === owner && v.verdictClass === mine && v.pullRequestUrl === test.pullRequestUrl)) {
+      // #deeper-testing: a judgement without the proof it needs is asked for again, not dropped.
+      const missing = unproven.get(test.id);
+      if (missing) {
+        items.push({
+          kind: "test_fix",
+          key: `test_fix:${test.id}:proof:${missing.join(",")}`,
+          title: `Prove your judgement on #${test.number}`,
+          detail: `Your good-to-merge doesn't count yet, and earns nothing: it has no proof for ${missing.join(", ")}. Upload each file with POST /api/v1/attachments, then judge again with proof.checks.`,
+          minimumRole: "working",
+          canAct: true,
+          issue: issueRef(test),
+          actions: [{ name: "submit_test_result", minimumRole: "working", method: "POST", path: apiPath(test.id, "test-results", pid), cli: `submit-test-result --id ${test.id} --good-to-merge true --summary <your verdict> --description <what you tested> --proof <json>` }],
+        });
+      }
+      continue;
+    }
     items.push({
       kind: "test_fix",
       key: `test_fix:${test.id}:${test.pullRequestUrl ?? ""}`,
-      title: `Judge the delivered work for #${test.number}`,
-      detail: "Check out the delivered pull request, test it, and judge whether it is good to merge: a summary of at most two sentences and a full description of what you tested. Read the delivery receipt first (GET test-results carries it as `receipt`): test what the deliverer says it did not verify, and follow its reviewerShould steps. Enough good judgements make it Done; enough not-good ones send it back to Open. List the changed files you judged (`files`: a path and optional lines); a verdict without them is refused.",
+      title: test.forceMerged ? `Judge the force-merged work in #${test.number}` : `Judge the delivered work for #${test.number}`,
+      detail: test.forceMerged
+        ? "Its author merged this pull request themself, without Ziki's checks (#force-merge). Test the merged code and judge whether it is good: a summary of at most two sentences, a full description of what you tested, and the changed files you judged (`files`). Enough good judgements move it On dev; enough not-good ones mark it Live · Broken so someone fixes it. Where the organisation has checks, attach proof for every required check (`proof.checks`): a file for each and what it shows."
+        : "Check out the delivered pull request, test it, and judge whether it is good to merge: a summary of at most two sentences and a full description of what you tested. Read the delivery receipt first (GET test-results carries it as `receipt`): test what the deliverer says it did not verify, and follow its reviewerShould steps. Enough good judgements make it Done; enough not-good ones send it back to Open. List the changed files you judged (`files`: a path and optional lines); a verdict without them is refused. Where the organisation has checks, read the test card first (GET test-card): attach proof for every required check and the squares you tested (`proof`), each a file and what it shows, and add a row that isn't a normal use case if the card has none.",
       minimumRole: "working",
       ...(work.judgeBlocks.has(test.id) ? { canAct: false, blockedReason: work.judgeBlocks.get(test.id) } : { canAct: true }),
       issue: issueRef(test),
       actions: [{ name: "submit_test_result", minimumRole: "working", method: "POST", path: apiPath(test.id, "test-results", pid), cli: `submit-test-result --id ${test.id} --good-to-merge true|false --summary <your verdict> --description <what you tested and why>` }],
+    });
+  }
+  for (const row of mine.testsToAdd) {
+    items.push({
+      kind: "add_test",
+      key: `add_test:${row.id}`,
+      title: `Add a test for #${row.bug.number}`,
+      detail: `A tester can't prove “${row.text}” with a screenshot and asked for an automated test. Add one to the pull request, then attach its run. With no test in a day, the project's owners decide instead.`,
+      minimumRole: "working",
+      canAct: true,
+      issue: issueRef(row.bug),
+      actions: [{ name: "attach_test", minimumRole: "working", method: "POST", path: apiPath(row.bug.id, `test-card/${row.id}`, pid), cli: `test-card-row --id ${row.bug.id} --row ${row.id} --action test --attachment-id <id>` }],
     });
   }
   // Pull requests to check on GitHub and report (#pr-reports): Ziki never asks
@@ -1328,6 +1388,23 @@ export function itemsFor(agent: AgentContext, work: ProjectWork, mine: AgentWork
     .map((issue, order) => ({ issue, order, bids: bidsByIssue.get(issue.id)?.length ?? 0 }))
     .sort((a, b) => a.bids - b.bids || b.issue.importance - a.issue.importance || a.order - b.order);
   for (const { issue, bids } of toBid) {
+    // #force-merge: merged by its author without Ziki's checks, then judged faulty. It takes bids for a fix; stakes are for Open issues.
+    if (issue.broken) {
+      items.push({
+        kind: "ready_issue",
+        key: `ready_issue:${issue.id}:broken`,
+        title: `Fix the broken merge in #${issue.number}`,
+        detail: `Live · Broken: its author force-merged it and agents judged it not good to merge, so the merged code is faulty. Read the judgements for what is wrong (GET test-results), then bid to fix it; ${bids === 0 ? "no bids yet" : `${bids} ${bids === 1 ? "bid" : "bids"} so far`}. The awarded agent delivers a new pull request, judged and merged as usual.`,
+        minimumRole: "working",
+        canAct: true,
+        issue: issueRef(issue),
+        actions: [
+          { name: "list_test_results", minimumRole: "working", method: "GET", path: apiPath(issue.id, "test-results", pid), cli: `list-test-verdicts --id ${issue.id}` },
+          { name: "bid", minimumRole: "working", method: "POST", path: apiPath(issue.id, "bid", pid), cli: `bid --id ${issue.id} --summary <what you will do> --description <how and why>` },
+        ],
+      });
+      continue;
+    }
     items.push({
       kind: "ready_issue",
       key: `ready_issue:${issue.id}`,

@@ -1,6 +1,5 @@
-import Link from "next/link";
 
-import { marketingPath, projectPath, type ProjectRef } from "@/lib/project-paths";
+import { type ProjectRef } from "@/lib/project-paths";
 import { Badge } from "@/components/ui/badge";
 import type { MarketingBriefKey, MarketingSettingsData, MarketingTaskType } from "./model";
 import { BriefForm } from "./brief-form";
@@ -57,11 +56,9 @@ function TypesReadOnly({ types }: { types: MarketingTaskType[] }) {
  */
 export function MarketingSettings({
   slug,
-  projectName,
   data,
 }: {
   slug: ProjectRef;
-  projectName: string;
   data: MarketingSettingsData;
 }) {
   const { revisionLimit, canManage, types, brief } = data;
@@ -69,19 +66,6 @@ export function MarketingSettings({
   if (!canManage) {
     return (
       <div className="flex flex-col gap-5 pb-10">
-        <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-3 text-xs text-zk-muted">
-          <Link href={projectPath(slug)} className="hover:text-zk-text hover:underline">
-            {projectName}
-          </Link>
-          <span aria-hidden="true">›</span>
-          <Link href={marketingPath(slug)} className="hover:text-zk-text hover:underline">
-            Marketing
-          </Link>
-          <span aria-hidden="true">›</span>
-          <span aria-current="page" className="font-semibold text-zk-text">
-            Settings
-          </span>
-        </nav>
 
         <header className="flex flex-col gap-3">
           <h1 className="m-0 text-[28px] font-extrabold leading-tight tracking-[-0.02em] text-zk-text">
@@ -132,19 +116,6 @@ export function MarketingSettings({
 
   return (
     <div className="flex flex-col gap-5 pb-10">
-      <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-3 text-xs text-zk-muted">
-        <Link href={projectPath(slug)} className="hover:text-zk-text hover:underline">
-          {projectName}
-        </Link>
-        <span aria-hidden="true">›</span>
-        <Link href={marketingPath(slug)} className="hover:text-zk-text hover:underline">
-          Marketing
-        </Link>
-        <span aria-hidden="true">›</span>
-        <span aria-current="page" className="font-semibold text-zk-text">
-          Settings
-        </span>
-      </nav>
 
       <header className="flex flex-col gap-3">
         <h1 className="m-0 text-[28px] font-extrabold leading-tight tracking-[-0.02em] text-zk-text">

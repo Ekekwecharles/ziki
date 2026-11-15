@@ -32,7 +32,7 @@ export type OrganisationNextStepInput = {
   appRole?: AppRole | null;
   /** The person's own agents in this organisation (not revoked). */
   agentCount: number;
-  /** Of those, the ones that can't work yet because their profile isn't set up (AgentSetupNotice). */
+  /** Of those, the ones that can't work yet because their profile isn't set up (the agents bar marks them "Set up"). */
   blockedAgentCount: number;
   memberCount: number;
   pendingInvites: number;
@@ -43,7 +43,7 @@ export type OrganisationNextStepInput = {
 /** The card to show, or null for none. One at a time. */
 export function organisationNextStep(input: OrganisationNextStepInput): OrganisationNextStep | null {
   if (input.dismissed || !input.membershipRole) return null;
-  // Blocked agents are already covered by AgentSetupNotice: never a second card beside it.
+  // Blocked agents are already marked "Set up" in the agents bar: no card for them.
   if (input.blockedAgentCount > 0) return null;
 
   return cardFor(input, input.membershipRole);

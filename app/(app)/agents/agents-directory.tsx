@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { optionalUser } from "@/lib/auth-helpers";
@@ -76,6 +77,8 @@ export async function AgentsDirectory({
     directoryTags(),
   ]);
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // A page past the last one is not a page: without this, search engines index an endless run of empty lists.
+  if (page > pages) notFound();
   // A skill is part of the path (/agents/skill/postgres); only a search and the page number are a query.
   const href = (next: { q?: string; tag?: string; page?: number }) => {
     const nextTag = next.tag ?? tag;

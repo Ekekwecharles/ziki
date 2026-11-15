@@ -1,16 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-/** Resolving merged work (#515, #reconcile-merged): an issue goes Live only on a report that its linked pull request is merged into the default branch; the claim is released, and a status that changed meanwhile leaves everything as it was. */
+/** Resolving merged work (#515, #reconcile-merged): an issue goes Live only on a report that its linked pull request is merged into the default branch; the claim is released, and a status that changed meanwhile leaves everything as it was. Force-merge (#force-merge): the local coder's own merge goes Live without any gate, and judgements afterwards move it On dev or mark it Broken. */
 const db = vi.hoisted(() => {
   const tx = {
     bug: { updateMany: vi.fn(), findUnique: vi.fn() },
     bugActivity: { create: vi.fn(), findFirst: vi.fn() },
-    issueClaim: { updateMany: vi.fn() },
+    issueClaim: { updateMany: vi.fn(), update: vi.fn() },
     supportThread: { findMany: vi.fn(async () => []), updateMany: vi.fn() },
     notification: { createMany: vi.fn() },
   };
   return {
-    bug: { findFirst: vi.fn() },
+    bug: { findFirst: vi.fn(), findUnique: vi.fn() },
     pullRequestReport: { findFirst: vi.fn() },
     $transaction: vi.fn(async (fn: (client: typeof tx) => unknown) => fn(tx)),
     tx,
@@ -21,9 +21,15 @@ const audit = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
 vi.mock("@/lib/agent-api/events", () => ({ publish }));
 vi.mock("@/lib/agents/audit", () => ({ audit }));
+const judged = vi.hoisted(() => ({ countedJudgements: vi.fn() }));
+vi.mock("@/lib/agent-api/tested-status", () => judged);
+const merge = vi.hoisted(() => ({ finalizeResolved: vi.fn(), countedReviewers: vi.fn(), creditedDeliveryUsers: vi.fn() }));
+vi.mock("@/lib/agent-api/merge", async (original) => ({ ...(await original<object>()), ...merge }));
 
 import type { AgentContext } from "@/lib/agents/require-agent";
 import { resolveMergedFix } from "@/lib/agent-api/resolve";
+import * as mergeDomain from "@/lib/agent-api/merge";
+import { forceMerge, settleForceMerged } from "@/lib/agent-api/force-merge";
 
 const PR = "https://github.com/acme/app/pull/12";
 const scope = { organisationId: "t1", projectId: "p1" };
@@ -71,6 +77,20 @@ beforeEach(() => {
 });
 
 describe("resolveMergedFix (Ziki #515, #pr-reports)", () => {
+  it("holds normal awards when the owner resolves imported work instead of taking the legacy no-payout path", async () => {
+    const imported = { ...bug(), outsideWork: { agentId: "importing-agent" }, organisationId: "t1", projectId: "p1" };
+    db.bug.findFirst.mockResolvedValue(imported);
+    db.bug.findUnique.mockResolvedValue(imported);
+    const credited = vi.spyOn(mergeDomain, "creditedDeliveryUsers").mockResolvedValue(["owner"]);
+    const counted = vi.spyOn(mergeDomain, "countedReviewers").mockResolvedValue({ reviewers: ["tester"], weight: 3, acceptedHeadSha: "abc1234" });
+    const finalize = vi.spyOn(mergeDomain, "finalizeResolved").mockResolvedValue();
+    try {
+      expect(await resolveMergedFix(agent(), scope, "bug1")).toMatchObject({ status: 200, body: { resolved: true } });
+      expect(finalize).toHaveBeenCalledWith(db.tx, expect.objectContaining({ solverUserId: "owner", solverAgentId: "importing-agent", claim: null, rewardedReviewerUserIds: ["tester"] }));
+    } finally {
+      credited.mockRestore(); counted.mockRestore(); finalize.mockRestore();
+    }
+  });
   it("lets an agent of any class resolve a fix reported merged into the default branch, and writes no points", async () => {
     db.bug.findFirst.mockResolvedValue(bug());
     for (const level of ["working", "manager", "merger"] as const) {
@@ -149,5 +169,74 @@ describe("resolveMergedFix (Ziki #515, #pr-reports)", () => {
     expect(db.tx.issueClaim.updateMany).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
+  });
+});
+
+describe("forceMerge (#force-merge)", () => {
+  const held = (over: Record<string, unknown> = {}) =>
+    bug({ track: "product", isBoosted: false, claims: [{ id: "c1", agentId: "a1", beneficiaryUserId: "owner" }], ...over });
+
+  it("moves the holder's own merged work straight to Live · Force-merged, with no report, review or judgement, and releases the claim", async () => {
+    db.bug.findFirst.mockResolvedValue(held({ status: "done", substatus: "requires_review" }));
+    const result = await forceMerge(agent(), scope, "bug1", { summary: "Merged locally." });
+    expect(result).toEqual({
+      status: 200,
+      body: { forceMerged: true, issueId: "bug1", previousStatus: "done", previousSubstatus: "requires_review", status: "resolved", substatus: "force_merged", pullRequestUrl: PR },
+    });
+    expect(db.tx.bug.updateMany).toHaveBeenCalledWith({
+      where: { id: "bug1", substatus: "requires_review", pullRequestUrl: PR },
+      data: { status: "resolved", substatus: "force_merged", pullRequestUrl: PR },
+    });
+    expect(db.tx.issueClaim.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "c1" }, data: expect.objectContaining({ status: "released", releaseReason: "force_merge" }) }));
+    expect(db.pullRequestReport.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("links the merged pull request when the work was never delivered", async () => {
+    db.bug.findFirst.mockResolvedValue(held({ pullRequestUrl: null }));
+    expect(await forceMerge(agent(), scope, "bug1", { summary: "Merged locally." })).toMatchObject({ status: 409, body: { error: "no_pull_request" } });
+    expect((await forceMerge(agent(), scope, "bug1", { summary: "Merged locally.", pullRequestUrl: PR })).status).toBe(200);
+    expect(db.tx.bug.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ pullRequestUrl: PR }) }));
+  });
+
+  it.each([
+    ["an agent that doesn't hold the issue, its owner's other agents included", held({ claims: [{ id: "c1", agentId: "a2", beneficiaryUserId: "owner" }] }), 403, "not_holder"],
+    ["an issue still Open", held({ status: "open", substatus: "open" }), 409, "not_force_mergeable"],
+    ["an issue already Live", held({ status: "resolved", substatus: "on_dev" }), 409, "not_force_mergeable"],
+  ])("refuses %s and changes nothing", async (_name, found, status, error) => {
+    db.bug.findFirst.mockResolvedValue(found);
+    expect(await forceMerge(agent(), scope, "bug1", { summary: "Merged locally." })).toMatchObject({ status, body: { error } });
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("settleForceMerged (#force-merge)", () => {
+  const forced = { ...bug({ status: "resolved", substatus: "force_merged", organisationId: "t1", projectId: "p1" }), claims: [] };
+
+  it("marks force-merged work Live · Broken once enough judgements say it is not good, so it takes bids for a fix", async () => {
+    db.bug.findUnique.mockResolvedValue(forced);
+    judged.countedJudgements.mockResolvedValue({ good: 0, notGood: 3, needed: 3 });
+    expect(await settleForceMerged(agent("tester"), "bug1")).toBe("merged_broken");
+    expect(db.tx.bug.updateMany).toHaveBeenCalledWith({ where: { id: "bug1", substatus: "force_merged" }, data: { status: "resolved", substatus: "merged_broken", assigneeId: null } });
+    expect(merge.finalizeResolved).not.toHaveBeenCalled();
+  });
+
+  it("moves it On dev with the points once enough judgements say it is good", async () => {
+    db.bug.findUnique.mockResolvedValue(forced);
+    db.tx.bug.findUnique.mockResolvedValue({ substatus: "force_merged", pullRequestUrl: PR });
+    judged.countedJudgements.mockResolvedValue({ good: 3, notGood: 0, needed: 3 });
+    merge.creditedDeliveryUsers.mockResolvedValue(["owner"]);
+    merge.countedReviewers.mockResolvedValue({ reviewers: ["erin"], weight: 3, acceptedHeadSha: "abc1234" });
+    expect(await settleForceMerged(agent("tester"), "bug1")).toBe("on_dev");
+    expect(merge.finalizeResolved).toHaveBeenCalledWith(db.tx, expect.objectContaining({ solverUserId: "owner", rewardedReviewerUserIds: ["erin"] }));
+  });
+
+  it("leaves it Force-merged while the judgements are short, and never moves an issue that isn't force-merged", async () => {
+    db.bug.findUnique.mockResolvedValue(forced);
+    judged.countedJudgements.mockResolvedValue({ good: 2, notGood: 1, needed: 3 });
+    expect(await settleForceMerged(agent("tester"), "bug1")).toBeNull();
+    db.bug.findUnique.mockResolvedValue({ ...forced, substatus: "merged_broken" });
+    judged.countedJudgements.mockResolvedValue({ good: 3, notGood: 0, needed: 3 });
+    expect(await settleForceMerged(agent("tester"), "bug1")).toBeNull();
+    expect(db.$transaction).not.toHaveBeenCalled();
   });
 });

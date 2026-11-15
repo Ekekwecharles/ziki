@@ -1,5 +1,6 @@
 import type {
   OnCallInviteStatus,
+  Prisma,
   SecurityCheckItemKind,
   SecurityCheckItemStatus,
   SecurityCheckStatus,
@@ -77,9 +78,34 @@ export function isSecurityCheckItemStatus(value: unknown): value is SecurityChec
   return typeof value === "string" && (SECURITY_CHECK_ITEM_STATUSES as readonly string[]).includes(value);
 }
 
-/** Whether agents may touch this check's target: never before ownership is proven. */
-export function agentsMayWork(check: { status: SecurityCheckStatus }, target: { verifiedAt: Date | null }): boolean {
-  return target.verifiedAt !== null && AGENT_WORKABLE_CHECK_STATUSES.has(check.status);
+/**
+ * Ownership proof (14 Nov plan): OFF for now, so a person can scan anything they
+ * type and we can test the whole flow and iterate on Mark's feedback. It is
+ * switched off, not removed: set `SECURITY_OWNERSHIP_PROOF_REQUIRED=true` to
+ * bring it back (the proof pages and checks are all still there). KYC is a
+ * separate, later step.
+ */
+export function ownershipProofRequired(): boolean {
+  return process.env.SECURITY_OWNERSHIP_PROOF_REQUIRED === "true";
+}
+
+/** Whether a target counts as proven: always, while proof is off; otherwise once `verifiedAt` is set. */
+export function isTargetProven(target: { verifiedAt: Date | null }, required = ownershipProofRequired()): boolean {
+  return !required || target.verifiedAt !== null;
+}
+
+/**
+ * The query condition for "a proven target", to spread into a check's `where`:
+ * nothing while proof is off, the `verifiedAt` test when it is on. It is the
+ * query-side twin of `isTargetProven`.
+ */
+export function provenTargetWhere(required = ownershipProofRequired()): { target?: { verifiedAt: { not: null } } } {
+  return required ? { target: { verifiedAt: { not: null } } } : {};
+}
+
+/** Whether agents may touch this check's target: never before ownership is proven (when proof is required). */
+export function agentsMayWork(check: { status: SecurityCheckStatus }, target: { verifiedAt: Date | null }, required = ownershipProofRequired()): boolean {
+  return isTargetProven(target, required) && AGENT_WORKABLE_CHECK_STATUSES.has(check.status);
 }
 
 /** Whether the client sees the full report (and agents get paid): only once paid. */
@@ -135,24 +161,67 @@ export function freeScanMonthStart(now = new Date()): Date {
 export type FreeScanAnswer = { allowed: true } | { allowed: false; reason: "target_used" | "workspace_limit" };
 
 /**
+ * Scan limits (14 Nov plan): OFF for now, so nothing stops a test scan. They are
+ * switched off, not removed: set `SECURITY_SCAN_LIMITS_ENABLED=true` to bring
+ * back the free-scan limits below. The chat's hourly message limit is separate
+ * and stays.
+ */
+export function scanLimitsEnabled(): boolean {
+  return process.env.SECURITY_SCAN_LIMITS_ENABLED === "true";
+}
+
+/**
  * Whether a new check may be free, from the free scans the target has had and
  * the free scans the workspace started this month (since freeScanMonthStart).
+ * Always allowed while the limits are off.
  */
-export function freeScanAllowed(counts: { targetFreeScans: number; workspaceFreeScansThisMonth: number }): FreeScanAnswer {
+export function freeScanAllowed(counts: { targetFreeScans: number; workspaceFreeScansThisMonth: number }, enabled = scanLimitsEnabled()): FreeScanAnswer {
+  if (!enabled) return { allowed: true };
   if (counts.targetFreeScans >= FREE_SCANS_PER_TARGET) return { allowed: false, reason: "target_used" };
   if (counts.workspaceFreeScansThisMonth >= FREE_SCANS_PER_WORKSPACE_PER_MONTH) return { allowed: false, reason: "workspace_limit" };
   return { allowed: true };
 }
 
+/**
+ * Who adds assets and starts checks (13 Nov): the workspace's owners and
+ * admins, who own the assets. Everyone else in the workspace only sees their
+ * own security work ("Your work").
+ */
+export const OWNERS_ONLY_MESSAGE = "Only workspace owners and admins can add assets and start checks. You can see your own work under Your work.";
+
 /** Preview scans (code only, blurred) one visitor may run from the public page in an hour. */
 export const PREVIEW_SCANS_PER_VISITOR_PER_HOUR = 5;
 
+/** Ziki's own security agent (14 Nov call): it does the parts nobody picks up in time. It has no key, is never listed and earns nothing. */
+export const ZIKI_SECURITY_AGENT_USERNAME = "ziki-security";
+/** A part nobody has taken in this long is done by Ziki's own security agent, so a client always gets a result. */
+export const FALLBACK_AFTER_MINUTES = 5;
+
+/**
+ * How long a part waits for an agent before Ziki's own does it, in ms: 5 minutes,
+ * or `SECURITY_FALLBACK_AFTER_MINUTES`. 0 (or below) turns the fallback off.
+ */
+export function fallbackAfterMs(env: Record<string, string | undefined> = process.env): number | null {
+  const raw = env.SECURITY_FALLBACK_AFTER_MINUTES?.trim();
+  const minutes = raw ? Number(raw) : Number.NaN;
+  if (Number.isNaN(minutes)) return FALLBACK_AFTER_MINUTES * 60_000;
+  return minutes > 0 ? minutes * 60_000 : null;
+}
+
+/**
+ * How long real agents have to take a part before only Ziki's own agent may (the
+ * fallback time), or null when they may take it whenever it waits. It only applies
+ * while the fallback can run (it needs Ziki's AI key). Without it an agent that
+ * takes a part and gives it straight back (no Claude credit, say) would keep every
+ * old part for itself, and the fallback would never find it waiting.
+ */
+export function fallbackWindowMs(env: Record<string, string | undefined> = process.env): number | null {
+  if (!env.ZIKI_CLAUDE_API_KEY?.trim()) return null;
+  return fallbackAfterMs(env);
+}
+
 /** At most this many on-call guests join a new workspace. */
 export const ON_CALL_GUESTS_PER_NEW_WORKSPACE = 3;
-/** An on-call candidate is online at least this many hours a day... */
-export const ON_CALL_CANDIDATE_HOURS_PER_DAY = 12;
-/** ...over this many days, plus finished jobs and rating. */
-export const ON_CALL_CANDIDATE_WINDOW_DAYS = 14;
 /** An on-call agent not seen for this long has gone quiet: flagged, and given no new work until it's back. */
 export const ON_CALL_QUIET_AFTER_MS = 15 * 60 * 1000;
 
@@ -163,7 +232,7 @@ export function isQuiet(lastSeenAt: Date | null, now = new Date()): boolean {
   return lastSeenAt === null || now.getTime() - lastSeenAt.getTime() >= ON_CALL_QUIET_AFTER_MS;
 }
 
-/** Whether an agent may get security-check jobs and read results: site-wide clearance. */
-export function isSecurityCleared(agent: { securityClearedAt: Date | null }): boolean {
-  return agent.securityClearedAt !== null;
+/** Whether an agent's owner is cleared, so the agent may get security-check jobs and read results: site-wide clearance, per person. */
+export function isSecurityCleared(person: { securityClearedAt: Date | null }): boolean {
+  return person.securityClearedAt !== null;
 }

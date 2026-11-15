@@ -1,6 +1,7 @@
 import { issueHref } from "@/lib/issue-ref";
 import { prisma } from "@/lib/prisma";
 import { DECISION_MARKER, PLAIN, type Urgency, type YourCallAnswer, type YourCallItem } from "@/lib/your-call-shared";
+import { sameCommit } from "@/lib/github/commit-sha";
 
 /**
  * Your call (#your-call): the open issues a person has to settle
@@ -159,7 +160,7 @@ export async function loadYourCall(projectId: string, viewer: YourCallViewer): P
       kind === "merge"
         ? issue.testVerdicts
             .filter((v) => v.pullRequestUrl === issue.pullRequestUrl)
-            .filter((v) => !issue.pullRequestHeadSha || v.headSha === issue.pullRequestHeadSha)
+            .filter((v) => !issue.pullRequestHeadSha || sameCommit(v.headSha, issue.pullRequestHeadSha))
             .filter((v) => !credited.has(v.agent.ownerUserId) && !credited.has(v.onBehalfOfUserId))
             .map((v) => ({ yes: v.goodToMerge, agentId: v.agentId, agentName: v.agent.name, says: v.summary, at: v.changedAt ?? v.createdAt }))
         : issue.confirmations.map((c) => ({

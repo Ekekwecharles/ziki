@@ -15,6 +15,7 @@ import {
   zeduNeedsOwner,
 } from "@/lib/organisations";
 import { selectOrganisationAction, setOrganisationArchivedAction } from "./actions";
+import { securityReturnPath } from "@/lib/security-return-path";
 import { AcceptInviteForm } from "./accept-invite-form";
 import { InviteCard } from "./invite-card";
 import { OrganisationActions } from "./organisation-actions";
@@ -37,6 +38,7 @@ export default async function OrganisationsPage({
     invite?: string | string[];
     error?: string | string[];
     notice?: string | string[];
+    next?: string | string[];
   }>;
 }) {
   const user = await requireUser();
@@ -46,7 +48,10 @@ export default async function OrganisationsPage({
     invite: inviteParam,
     error: errorParam,
     notice: noticeParam,
+    next: nextParam,
   } = await searchParams;
+  // From Security with a scanned site: after creating the organisation, go back there.
+  const next = (securityReturnPath(typeof nextParam === "string" ? nextParam : null)) ?? undefined;
   const inviteId = typeof inviteParam === "string" ? inviteParam : "";
   const error = typeof errorParam === "string" ? errorParam : "";
   const notice = typeof noticeParam === "string" ? noticeParam : "";
@@ -85,7 +90,7 @@ export default async function OrganisationsPage({
             : "You're not in an organisation yet. Accept an invite, or create an organisation of your own."}
         </p>
       </div>
-      <OrganisationActions nameMax={ORGANISATION_NAME_MAX} />
+      <OrganisationActions nameMax={ORGANISATION_NAME_MAX} next={next} />
       </div>
 
       <div className="flex items-center justify-between rounded-[18px] border border-zk-border bg-gradient-to-r from-zk-surface to-zk-tint/20 p-4 sm:p-5">

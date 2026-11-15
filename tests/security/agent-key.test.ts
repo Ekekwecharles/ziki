@@ -4,6 +4,9 @@ const findUnique = vi.hoisted(() => vi.fn());
 const update = vi.hoisted(() => vi.fn());
 const findActivation = vi.hoisted(() => vi.fn());
 const registryDb = vi.hoisted(() => ({
+  project: { findUnique: vi.fn(), findFirst: vi.fn() },
+  expressImportGrant: { findUnique: vi.fn() },
+  expressImportRequest: { findUnique: vi.fn() },
   agent: { findUnique: vi.fn() },
   membership: { findUnique: vi.fn() },
   $transaction: vi.fn(),
@@ -17,6 +20,7 @@ import { AgentLevelError } from "@/lib/agents/levels";
 import { AgentAuthError, agentErrorResponse, requireAgent } from "@/lib/agents/require-agent";
 import { activateAgent } from "@/lib/agents/registry";
 import { agentCapSummary } from "@/lib/agents/registry-limits";
+import { assertExpressImportGrant, expressImportAccess, expressImportRequestSchema, requestExpressImportAccess, setExpressImportGrant } from "@/lib/agents/express-import";
 
 const KEY = "ziki_valid-key-for-tests";
 const request = (authorization?: string) => ({
@@ -247,5 +251,88 @@ describe("agentCapSummary", () => {
     const over = agentCapSummary(Array.from({ length: 10 }, (_, i) => agent(i >= 6)), 5);
     expect(over).toMatchObject({ live: 10, paused: 4, running: 6, over: 5 });
     expect(over.note).toContain("5 over the limit");
+  });
+});
+
+describe("project-scoped express import grants (#788)", () => {
+  const grantTx = {
+    $queryRaw: vi.fn(), agentActivation: { findUnique: vi.fn() }, membership: { findUnique: vi.fn() },
+    project: { findUnique: vi.fn() },
+    expressImportRequest: { findUnique: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
+    expressImportGrant: { findUnique: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() }, agentAuditEvent: { create: vi.fn() },
+  };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    registryDb.project.findUnique.mockResolvedValue({ organisationId: "org-1", archivedAt: null });
+    registryDb.project.findFirst.mockResolvedValue({ archivedAt: null });
+    registryDb.membership.findUnique.mockResolvedValue({ role: "admin" });
+    registryDb.$transaction.mockImplementation(async (run) => run(grantTx));
+    grantTx.agentActivation.findUnique.mockResolvedValue({ deactivatedAt: null, agent: { revokedAt: null, ownerUserId: "worker" } });
+    grantTx.membership.findUnique.mockResolvedValue({ id: "member", role: "admin" });
+    grantTx.project.findUnique.mockResolvedValue({ organisationId: "org-1", archivedAt: null });
+    grantTx.expressImportGrant.findUnique.mockResolvedValue(null);
+    grantTx.expressImportRequest.findUnique.mockResolvedValue(null);
+  });
+  it("allows an organisation admin to grant and revoke one project's access with an audit", async () => {
+    await setExpressImportGrant({ id: "admin" }, "agent-1", "project-1", true);
+    expect(grantTx.expressImportGrant.upsert).toHaveBeenCalledWith(expect.objectContaining({ create: { agentId: "agent-1", projectId: "project-1", grantedByUserId: "admin" } }));
+    await setExpressImportGrant({ id: "admin" }, "agent-1", "project-1", false);
+    expect(grantTx.expressImportGrant.deleteMany).toHaveBeenCalledWith({ where: { agentId: "agent-1", projectId: "project-1" } });
+    expect(grantTx.agentAuditEvent.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ actorUserId: "admin", action: "agent.express_import_changed", payload: { enabled: false } }) }));
+  });
+  it("refuses ordinary members even when they own the agent", async () => {
+    registryDb.membership.findUnique.mockResolvedValue({ role: "member" });
+    await expect(setExpressImportGrant({ id: "worker" }, "agent-1", "project-1", true)).rejects.toMatchObject({ status: 403 });
+    expect(grantTx.expressImportGrant.upsert).not.toHaveBeenCalled();
+  });
+  it("records an owner's request without granting access, and prevents duplicate pending requests", async () => {
+    await requestExpressImportAccess({ id: "worker" }, "agent-1", "project-1", "Import work already delivered with the project owner.");
+    expect(grantTx.expressImportRequest.upsert).toHaveBeenCalledWith(expect.objectContaining({ create: expect.objectContaining({ agentId: "agent-1", projectId: "project-1", reason: expect.any(String) }) }));
+    expect(grantTx.expressImportGrant.upsert).not.toHaveBeenCalled();
+    grantTx.expressImportRequest.findUnique.mockResolvedValue({ decision: "pending" });
+    await expect(requestExpressImportAccess({ id: "worker" }, "agent-1", "project-1", "Again")).rejects.toMatchObject({ status: 409 });
+  });
+  it("rejects requests for somebody else's agent or without an explanation", async () => {
+    await expect(requestExpressImportAccess({ id: "other-owner" }, "agent-1", "project-1", "Please grant access.")).rejects.toMatchObject({ status: 403 });
+    await expect(requestExpressImportAccess({ id: "worker" }, "agent-1", "project-1", " ")).rejects.toMatchObject({ status: 400 });
+    expect(grantTx.expressImportRequest.upsert).not.toHaveBeenCalled();
+  });
+  it("records admin approval or decline on the pending request", async () => {
+    await setExpressImportGrant({ id: "admin" }, "agent-1", "project-1", true, "Approved for owner-directed work.");
+    expect(grantTx.expressImportRequest.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({ data: expect.objectContaining({ decision: "approved", reviewedByUserId: "admin", response: "Approved for owner-directed work." }) }));
+    await setExpressImportGrant({ id: "admin" }, "agent-1", "project-1", false, "Use the normal board workflow for now.");
+    expect(grantTx.expressImportRequest.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({ data: expect.objectContaining({ decision: "declined", response: "Use the normal board workflow for now." }) }));
+  });
+  it("reports a pending or declined decision without treating it as permission", async () => {
+    registryDb.expressImportGrant.findUnique.mockResolvedValue(null);
+    for (const decision of ["pending", "declined"]) {
+      registryDb.expressImportRequest.findUnique.mockResolvedValue({ decision, response: "Admin feedback" });
+      expect(await expressImportAccess({ agentId: "agent-1", organisationId: "org-1" }, "project-1")).toMatchObject({ expressImportAllowed: false, request: { decision, response: "Admin feedback" } });
+    }
+    expect(registryDb.expressImportRequest.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { agentId_projectId: { agentId: "agent-1", projectId: "project-1" } } }));
+  });
+  it("distinguishes a current grant from an approved request whose access was revoked", async () => {
+    registryDb.expressImportRequest.findUnique.mockResolvedValue({ decision: "approved", response: "Approved" });
+    registryDb.expressImportGrant.findUnique.mockResolvedValue({ createdAt: new Date() });
+    expect(await expressImportAccess({ agentId: "agent-1", organisationId: "org-1" }, "project-1")).toMatchObject({ expressImportAllowed: true });
+    registryDb.expressImportGrant.findUnique.mockResolvedValue(null);
+    expect(await expressImportAccess({ agentId: "agent-1", organisationId: "org-1" }, "project-1")).toMatchObject({ expressImportAllowed: false, request: { decision: "approved" } });
+    registryDb.project.findFirst.mockResolvedValue(null);
+    await expect(expressImportAccess({ agentId: "agent-1", organisationId: "another-org" }, "project-1")).rejects.toMatchObject({ status: 404 });
+    expect(expressImportRequestSchema.safeParse({ reason: "Please approve", agentId: "somebody-else" }).success).toBe(false);
+  });
+  it("refuses inactive agents and archived projects", async () => {
+    grantTx.agentActivation.findUnique.mockResolvedValue(null);
+    await expect(setExpressImportGrant({ id: "admin" }, "agent-1", "project-1", true)).rejects.toMatchObject({ status: 404 });
+    registryDb.project.findUnique.mockResolvedValue({ organisationId: "org-1", archivedAt: new Date() });
+    await expect(setExpressImportGrant({ id: "admin" }, "agent-1", "project-1", true)).rejects.toMatchObject({ status: 409 });
+  });
+  it("requires the exact project grant and rejects another organisation's project", async () => {
+    registryDb.expressImportGrant.findUnique.mockResolvedValue(null);
+    const caller = { agentId: "agent-1", organisationId: "org-1" };
+    const { prisma } = await import("@/lib/prisma");
+    await expect(assertExpressImportGrant(prisma, caller, "project-2")).rejects.toMatchObject({ status: 403 });
+    registryDb.project.findFirst.mockResolvedValue(null);
+    await expect(assertExpressImportGrant(prisma, caller, "foreign-project")).rejects.toMatchObject({ status: 404 });
   });
 });

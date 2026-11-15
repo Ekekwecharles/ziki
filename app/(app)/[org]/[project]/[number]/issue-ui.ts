@@ -27,6 +27,8 @@ export const issueStatusChipClass: Record<Substatus, string> = {
   on_staging: "bg-zk-ok-bg text-zk-ok-fg",
   on_prod: "bg-zk-ok-bg text-zk-ok-fg",
   published: "bg-zk-ok-bg text-zk-ok-fg",
+  force_merged: "bg-zk-warn-bg text-zk-warn-fg",
+  merged_broken: "bg-zk-bad-bg text-zk-bad-fg",
   closed: "bg-zk-chip text-zk-text2",
 };
 

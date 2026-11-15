@@ -30,7 +30,7 @@ function FileThumbnail({ file }: { file?: LibraryFile }) {
   </span>;
 }
 
-export function Library({ slug, projectName, initial }: { slug: ProjectRef; projectName: string; initial: LibraryResult }) {
+export function Library({ slug, initial }: { slug: ProjectRef; initial: LibraryResult }) {
   const params = useSearchParams();
   const [result, setResult] = useState(initial);
   const [refreshError, setRefreshError] = useState(false);
@@ -107,9 +107,9 @@ export function Library({ slug, projectName, initial }: { slug: ProjectRef; proj
     } finally { request.current = false; setPending(false); }
   }
 
-  const tasksPath = marketingPath(slug);
+  const tasksPath = marketingPath(slug, "tasks");
   return <div className="lb-page" data-detail={detail}>
-    <LibraryHeading slug={slug} projectName={projectName} />
+    <LibraryHeading />
     {!result.ok ? <section className="lb-state" aria-busy={pending}>
       <span className="lb-state-icon lb-warning" aria-hidden="true">!</span>
       <h2 ref={errorHeading} tabIndex={-1} role="alert">We couldn’t load the Output box</h2><p>Check your connection and try again in a moment.</p>

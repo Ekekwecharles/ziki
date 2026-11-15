@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth-helpers";
+import { securityReturnPath } from "@/lib/security-return-path";
 import { fieldError } from "@/lib/form-errors";
 import {
   ACCEPT_INVITE_RATE_LIMIT,
@@ -56,11 +57,12 @@ export type OrganisationFormResult = {
 };
 
 /** Work in this organisation on this device, and open its project (#project-urls): the one given, else its first. */
-async function enterOrganisation(organisationId: string): Promise<never> {
+async function enterOrganisation(organisationId: string, next?: string | null): Promise<never> {
   await setActiveOrganisationCookie(organisationId);
   revalidatePath("/", "layout");
-  // /home opens the first project of the organisation just made current, or its Projects page when it has none.
-  redirect("/home");
+  // Back to where the person was going, if that was Security (a site they scanned on the public page).
+  // Otherwise /home opens the first project of the organisation just made current, or its Projects page when it has none.
+  redirect(next ?? "/home");
 }
 
 /**
@@ -104,7 +106,7 @@ export async function createOrganisationAction(
     const error = fieldError(result.field ?? "name", result.error);
     return result.duplicateName ? { ...error, duplicateName: result.duplicateName } : error;
   }
-  return enterOrganisation(result.organisation.id);
+  return enterOrganisation(result.organisation.id, securityReturnPath(formData.get("next")));
 }
 
 /** Rename a organisation the person owns; the slug stays the same. */

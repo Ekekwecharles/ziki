@@ -172,6 +172,7 @@ export async function readConfirmations(
       status: true,
       substatus: true,
       vettedAt: true,
+      outsideWork: { select: { id: true } },
     },
   });
   if (!bugs?.length) return result;
@@ -236,7 +237,7 @@ export async function readConfirmations(
     result.set(bug.id, {
       status: bug.status,
       substatus: bug.substatus,
-      confirmed: Boolean(bug.vettedAt) || isConfirmedCount(accepts, needed),
+      confirmed: Boolean(bug.vettedAt || bug.outsideWork) || isConfirmedCount(accepts, needed),
       accepts,
       rejects,
       needed,

@@ -8,6 +8,8 @@ import { openSecret } from "@/lib/secret-box";
 import { materializeApprovedPairings } from "@/lib/agents/pairing";
 import { isAgentPlatformEnabled } from "@/lib/feature-flags";
 import { FirstAgentEmptyState } from "@/components/first-agent-empty-state";
+import { OnCallInvites } from "@/components/on-call-invites";
+import { OnCallSetup } from "@/components/on-call-setup";
 import { ManageAgentsList, type ManageAgentItem } from "@/app/(app)/settings/agents/manage-agents-list";
 import {
   agentsMutedClass,
@@ -131,6 +133,8 @@ export default async function AgentsPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-8">
+      <OnCallInvites userId={user.id} />
+      <OnCallSetup userId={user.id} />
       <div className="space-y-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
           <div className="min-w-0 space-y-1 sm:max-w-xl md:max-w-2xl">

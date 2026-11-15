@@ -15,14 +15,15 @@
   border-color: var(--color-orange-300);
 }
 .security-severity--medium {
-  background: var(--color-amber-100);
-  color: var(--color-amber-900);
-  border-color: var(--color-amber-300);
+  background: var(--color-yellow-100);
+  color: var(--color-yellow-900);
+  border-color: var(--color-yellow-300);
 }
+/* Blue, not grey (14 Nov call): low is still a finding, not a disabled one. */
 .security-severity--low {
-  background: var(--color-slate-100);
-  color: var(--color-slate-700);
-  border-color: var(--color-slate-300);
+  background: var(--color-blue-100);
+  color: var(--color-blue-900);
+  border-color: var(--color-blue-300);
 }
 /* Inside the form's radio labels the chip is text only, with its colour. */
 label .security-severity {

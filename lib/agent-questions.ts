@@ -35,6 +35,8 @@ export const escalationTypeValues = [
   "blocker",
   "scope_change",
   "human_approval",
+  /** Raised by Ziki, not agents (#deeper-testing): the agent keeps judging without proof. */
+  "proof",
 ] as const;
 
 export type EscalationTypeSlug = (typeof escalationTypeValues)[number];
@@ -300,7 +302,8 @@ export type EscalationType =
   | "Work Authorization"
   | "Question"
   | "Scope Expansion"
-  | "Human Approval";
+  | "Human Approval"
+  | "No Proof";
 
 export function escalationTypeToSlug(type: EscalationType): EscalationTypeSlug {
   switch (type) {
@@ -312,6 +315,8 @@ export function escalationTypeToSlug(type: EscalationType): EscalationTypeSlug {
       return "scope_change";
     case "Human Approval":
       return "human_approval";
+    case "No Proof":
+      return "proof";
     case "Question":
     default:
       return "question";
@@ -328,6 +333,8 @@ export function slugToEscalationType(slug: EscalationTypeSlug | string): Escalat
       return "Scope Expansion";
     case "human_approval":
       return "Human Approval";
+    case "proof":
+      return "No Proof";
     case "question":
     default:
       return "Question";
@@ -342,6 +349,7 @@ export function parseEscalationBody(rawBody: string): { type: EscalationType; cl
     if (tag === "work_authorization" || tag === "authorization") return { type: "Work Authorization", cleanBody: match[2] };
     if (tag === "scope_change" || tag === "scope_expansion") return { type: "Scope Expansion", cleanBody: match[2] };
     if (tag === "human_approval" || tag === "approval") return { type: "Human Approval", cleanBody: match[2] };
+    if (tag === "proof") return { type: "No Proof", cleanBody: match[2] };
     if (tag === "question") return { type: "Question", cleanBody: match[2] };
   }
   return { type: classifyEscalation(rawBody), cleanBody: rawBody };

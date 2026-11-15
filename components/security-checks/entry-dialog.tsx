@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { SecurityChat } from "./security-chat";
 
 /**
- * "Check a site" (#security-checks, part 1). The box is only needed now and
+ * "Add asset" (#security-checks, part 1). The box is only needed now and
  * then, so it waits behind a button and opens in a pop-up, like "Add idea".
  */
 export function CheckSiteButton({ id = "security-target", variant = "primary" }: { id?: string; variant?: "primary" | "large" | "inline" }) {
@@ -34,7 +34,7 @@ export function CheckSiteButton({ id = "security-target", variant = "primary" }:
         }
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-        Check a site
+        Add asset
       </button>
       {/* Esc is handled by onCancel; onClick only catches a click on the backdrop, which has no keyboard equivalent to add. */}
       {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions */}
@@ -57,7 +57,7 @@ export function CheckSiteButton({ id = "security-target", variant = "primary" }:
                 <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-zk-tint text-zk-accent">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true"><path d="M12 3v18M3 12h18" /></svg>
                 </span>
-                <h2 id={`${id}-dialog-title`} className="m-0 text-base font-bold text-zk-text">Check a site</h2>
+                <h2 id={`${id}-dialog-title`} className="m-0 text-base font-bold text-zk-text">Add asset</h2>
               </div>
               <button
                 type="button"
@@ -70,7 +70,7 @@ export function CheckSiteButton({ id = "security-target", variant = "primary" }:
             </div>
             <SecurityChat id={id} focusOnOpen />
             <p className="m-0 border-t border-zk-divider pt-4 text-xs text-zk-muted">
-              The first scan is free. Next, you show it&apos;s yours. Agents only look: they never log in as you or change anything.
+              Next, you show it&apos;s yours. Agents only look: they never log in as you or change anything.
             </p>
           </div>
         ) : null}

@@ -1,11 +1,13 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth-helpers";
 import { currentOrganisationAccess } from "@/lib/organisation-access";
 import { prisma } from "@/lib/prisma";
-import { FINISHED_CHECK_STATUSES, TARGET_KIND_LABEL } from "@/lib/security-checks";
+import { FINISHED_CHECK_STATUSES, ownershipProofRequired, TARGET_KIND_LABEL } from "@/lib/security-checks";
 import { OrgPageHeader, orgListCard } from "../../../../[org]/[project]/org/org-ui";
 import { OwnershipSteps } from "./ownership-steps";
+import { QuickScanLink } from "@/components/security-checks/quick-scan-link";
+import { readQuickScan } from "@/lib/security-checks/entry";
 
 export const metadata = { title: "Show it's yours" };
 
@@ -14,7 +16,11 @@ const KIND_NOUN = { website: "site", server: "server", repo: "repo" } as const;
 /**
  * Step 2, show it's yours (#security-checks, part 2). Before any agent looks
  * at a target, the client proves it is theirs with its secret code, once. Then
- * its checks are let go to the agents and the client goes back to Sites, where the free scan runs.
+ * its checks are let go to the agents and the client goes back to Assets, where the free scan runs.
+ *
+ * Hidden for now (14 Nov plan, D1): while SECURITY_OWNERSHIP_PROOF_REQUIRED isn't
+ * "true" there is nothing to prove, so an old link lands back on Security, on
+ * this person's open check when there is one. The page stays for when proof returns.
  */
 export default async function VerifySecurityTargetPage({ params }: { params: Promise<{ id: string }> }) {
   const [{ id }, user] = await Promise.all([params, requireUser()]);
@@ -29,6 +35,7 @@ export default async function VerifySecurityTargetPage({ params }: { params: Pro
       value: true,
       ownershipToken: true,
       verifiedAt: true,
+      previewSummary: true,
       checks: {
         // Checks are per person: only this person's own check carries on from here.
         where: { requestedById: user.id, status: { notIn: [...FINISHED_CHECK_STATUSES] } },
@@ -42,7 +49,9 @@ export default async function VerifySecurityTargetPage({ params }: { params: Pro
 
   const openCheck = target.checks[0] ?? null;
   const next = openCheck ? `/security?check=${encodeURIComponent(openCheck.id)}` : "/security";
+  if (!ownershipProofRequired()) redirect(next);
   const noun = KIND_NOUN[target.kind];
+  const quickScan = readQuickScan(target.previewSummary);
 
   // For a repo: whether the workspace's GitHub App is connected yet, and where to connect it.
   const projects =
@@ -71,12 +80,12 @@ export default async function VerifySecurityTargetPage({ params }: { params: Pro
         <ol aria-label="Steps" className="m-0 flex list-none flex-wrap items-center gap-x-1.5 gap-y-1 p-0 text-[13px]">
           <Step state={target.verifiedAt ? "done" : "now"}>Show it&apos;s yours</Step>
           <StepLine />
-          <Step state={target.verifiedAt ? "now" : "later"}>
-            Check <span className="font-normal text-zk-muted">· free</span>
-          </Step>
+          <Step state={target.verifiedAt ? "now" : "later"}>Checking</Step>
           <StepLine />
           <Step state="later">Fix</Step>
         </ol>
+        {/* The quick scan from when it was added (#security-checks): why it's worth proving. */}
+        {quickScan && !target.verifiedAt ? <QuickScanLink summary={quickScan} /> : null}
       </div>
 
       <section className={orgListCard} aria-label={`Show ${target.value} is yours`}>

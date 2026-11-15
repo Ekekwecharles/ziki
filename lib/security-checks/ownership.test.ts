@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { isTargetProven } from "@/lib/security-checks";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 
@@ -163,5 +164,33 @@ ${TOKEN}
     const result = await proveOwnership(site, "html_tag", forbidden);
     expect(result.ok).toBe(false);
     expect(JSON.stringify(result)).not.toContain("403");
+  });
+});
+
+describe("ownership proof switched off (14 Nov plan, D1)", () => {
+  const unproven = { verifiedAt: null };
+  const proven = { verifiedAt: new Date("2026-11-12T10:00:00Z") };
+
+  it("counts every target as proven while proof is off", () => {
+    expect(isTargetProven(unproven, false)).toBe(true);
+    expect(isTargetProven(proven, false)).toBe(true);
+  });
+
+  it("needs a real proof again once the setting is on", () => {
+    expect(isTargetProven(unproven, true)).toBe(false);
+    expect(isTargetProven(proven, true)).toBe(true);
+  });
+
+  it("is off unless SECURITY_OWNERSHIP_PROOF_REQUIRED is exactly \"true\"", () => {
+    const before = process.env.SECURITY_OWNERSHIP_PROOF_REQUIRED;
+    try {
+      delete process.env.SECURITY_OWNERSHIP_PROOF_REQUIRED;
+      expect(isTargetProven(unproven)).toBe(true);
+      process.env.SECURITY_OWNERSHIP_PROOF_REQUIRED = "true";
+      expect(isTargetProven(unproven)).toBe(false);
+    } finally {
+      if (before === undefined) delete process.env.SECURITY_OWNERSHIP_PROOF_REQUIRED;
+      else process.env.SECURITY_OWNERSHIP_PROOF_REQUIRED = before;
+    }
   });
 });

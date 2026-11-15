@@ -6,6 +6,7 @@ import { workflowFor } from "@/lib/workflow";
 import { moveTo } from "@/lib/issue-substatus";
 import { afterSendBack, judgementCounts } from "@/lib/marketing/track";
 import { activeLevels, levelIn } from "@/lib/agents/active-in";
+import { checksFor, countsWithProof, loadCard, loadProofRules, NO_CHECKS, type IssueChecks, type TestCard } from "@/lib/proof";
 
 /**
  * The Delivered step's rule (#delivered-step). Once the agent holding the
@@ -20,13 +21,16 @@ import { activeLevels, levelIn } from "@/lib/agents/active-in";
  * - Otherwise it stays Delivered.
  *
  * Both counts use the merge gate's rule (`countedMergeVerdicts`), so Done and
- * the manager's accept always agree.
+ * the manager's accept always agree. Where the organisation has checks
+ * (lib/proof.ts), only judgements with proof count, and a proven fail or a test
+ * card square nobody has proven holds the issue from Done · Accepted.
  */
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
 /** What the Delivered step's count reads about an issue. */
 export const judgedBugSelect = {
+  outsideWork: { select: { agentId: true } },
   id: true,
   organisationId: true,
   projectId: true,
@@ -35,6 +39,10 @@ export const judgedBugSelect = {
   track: true,
   revisionCount: true,
   pullRequestUrl: true,
+  pullRequestHeadSha: true,
+  typeId: true,
+  areaId: true,
+  priority: true,
   assigneeId: true,
   beneficiaryUserId: true,
   reporterId: true,
@@ -60,6 +68,7 @@ export type JudgedBug = Prisma.BugGetPayload<{ select: typeof judgedBugSelect }>
 export const judgementSelect = {
   goodToMerge: true,
   headSha: true,
+  proof: true,
   onBehalfOfUserId: true,
   agent: { select: { id: true, ownerUserId: true, activations: activeLevels } },
 } satisfies Prisma.TestVerdictSelect;
@@ -71,17 +80,20 @@ export type Judgement = Prisma.TestVerdictGetPayload<{ select: typeof judgementS
  * behind it (a manager agent filed it on the holder's behalf,
  * lib/agent-api/stranded-delivery.ts) has no claim holder to leave out, so the
  * people the delivery credits stand in that place: nothing from their agents,
- * and nothing given on their behalf, counts.
+ * and nothing given on their behalf, counts. Where the organisation has checks,
+ * only judgements with proof count (lib/proof.ts).
  */
 export function countJudgements(
   verdicts: readonly Judgement[],
   bug: JudgedBug,
   creditedUserIds: readonly string[],
+  checks: IssueChecks,
 ): { good: number; notGood: number } {
   const claim = deliveredClaim(bug);
+  const proven = verdicts.filter((v) => countsWithProof(v, checks, bug.pullRequestHeadSha));
   const counted = claim
-    ? verdicts
-    : verdicts.filter((v) => !creditedUserIds.includes(v.agent.ownerUserId) && !creditedUserIds.includes(v.onBehalfOfUserId));
+    ? proven
+    : proven.filter((v) => !creditedUserIds.includes(v.agent.ownerUserId) && !creditedUserIds.includes(v.onBehalfOfUserId));
   const reviewed = bug as unknown as ReviewedBug;
   return {
     good: countedMergeVerdicts(counted.filter((v) => v.goodToMerge), claim, reviewed, bug.organisationId).weight,
@@ -93,13 +105,17 @@ export function countJudgements(
 export async function countedJudgements(
   db: Db,
   bugId: string,
-): Promise<{ good: number; notGood: number; needed: number } | null> {
+  /** The card when the caller already loaded it (the issue page), so it isn't loaded twice. */
+  loaded?: TestCard,
+): Promise<{ good: number; notGood: number; needed: number; held: boolean } | null> {
   const bug = await db.bug.findUnique({ where: { id: bugId }, select: judgedBugSelect });
   if (!bug) return null;
   if (bug.track !== "marketing" && !bug.pullRequestUrl) return null;
 
   let verdicts: Judgement[] = [];
   let credited: string[] = [];
+  // Marketing work has no pull request to prove anything on: its judgements count as before.
+  const card = bug.track === "marketing" ? null : (loaded ?? (await loadCard(db, bug)));
 
   if (bug.track === "marketing") {
     const delivery = await db.delivery.findFirst({
@@ -138,9 +154,34 @@ export async function countedJudgements(
         );
   }
 
-  const { good, notGood } = countJudgements(verdicts, bug, credited);
+  const { good, notGood } = countJudgements(verdicts, bug, credited, card?.checks ?? NO_CHECKS);
   const { verdictsNeeded } = await workflowFor(bug.projectId, db);
-  return { good, notGood, needed: verdictsNeeded };
+  return { good, notGood, needed: verdictsNeeded, held: Boolean(card?.on && (card.holes > 0 || card.failed > 0)) };
+}
+
+/**
+ * The Issues list's Tests bar (#deeper-testing): for each issue being judged,
+ * the weight of judgements that count and how many are needed, by the same
+ * count as the Delivered step. One query for the whole page.
+ */
+export async function judgementBars(db: Db, bugIds: string[]): Promise<Map<string, { good: number; needed: number }>> {
+  const bars = new Map<string, { good: number; needed: number }>();
+  // Most tabs list no delivered issue: no query then.
+  if (!bugIds.length) return bars;
+  const bugs = await db.bug.findMany({
+    where: { id: { in: bugIds }, status: "done", track: "product", pullRequestUrl: { not: null } },
+    select: { ...judgedBugSelect, testVerdicts: { orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { ...judgementSelect, pullRequestUrl: true } } },
+  });
+  if (!bugs.length) return bars;
+  const rules = await loadProofRules(db, bugs[0].organisationId);
+  const needed = new Map<string, number>();
+  for (const bug of bugs) {
+    if (!needed.has(bug.projectId)) needed.set(bug.projectId, (await workflowFor(bug.projectId, db)).verdictsNeeded);
+    const verdicts = bug.testVerdicts.filter((v) => v.pullRequestUrl === bug.pullRequestUrl);
+    const { good } = countJudgements(verdicts, bug, [], checksFor(rules, bug));
+    bars.set(bug.id, { good, needed: needed.get(bug.projectId)! });
+  }
+  return bars;
 }
 
 /**
@@ -160,7 +201,7 @@ export async function refreshJudgedStatus(
 
   const count = await countedJudgements(db, bugId);
   if (!count) return null;
-  const next = count.good >= count.needed ? "accepted" : count.notGood >= count.needed ? "open" : "requires_review";
+  const next = count.good >= count.needed && !count.held ? "accepted" : count.notGood >= count.needed ? "open" : "requires_review";
   if (next === bug.substatus) return null;
 
   if (next === "open") {
@@ -253,7 +294,9 @@ export async function refreshJudgedStatus(
           ? `Judgements weighing ${count.good} say the delivered work is good to merge: moved to Done · Accepted`
           : next === "open"
             ? `Judgements weighing ${count.notGood} say the delivered work is not good to merge: back to Open`
-            : `Judgements weighing fewer than ${count.needed} say it is good to merge: back to Done · Requires review`,
+            : count.held && count.good >= count.needed
+              ? "The test card has a proven fail, or squares nobody has proven: back to Done · Requires review"
+              : `Judgements weighing fewer than ${count.needed} say it is good to merge: back to Done · Requires review`,
       metadata: { field: "status", from: bug.substatus, to: next, good: count.good, notGood: count.notGood, needed: count.needed },
     },
   });

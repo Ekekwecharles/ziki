@@ -59,7 +59,7 @@ export default async function OrgLayout({ children, params }: { children: React.
       {/* One Settings area: your settings and the organisation's share this sidebar (components/settings-nav.tsx). */}
       <div className="settings-layout">
         <Suspense fallback={<nav aria-label="Settings sections" className="settings-navigation" />}>
-          <SettingsNav orgRef={current.ref} orgName={org.name} pendingJoinCount={pendingJoinCount} />
+          <SettingsNav orgRef={current.ref} orgName={org.name} pendingJoinCount={pendingJoinCount} owner={org.owner} />
         </Suspense>
         <div className="min-w-0 space-y-6">{children}</div>
       </div>

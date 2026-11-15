@@ -45,7 +45,8 @@ function toIssue(row: { id: string; number: number; organisationId: string; isDe
  * is a redirect to the issue's real project.
  *
  * Signed out (a link-preview bot, #117), the organisation and project slugs
- * name one project, so the issue is the one with that number in it.
+ * name one project, so the issue is the one with that number in it, and only
+ * when that project is public.
  *
  * A top-level route's name is never a project (lib/project-slug.ts), so a
  * path such as `/settings/12` that no page serves is a plain 404.
@@ -57,7 +58,8 @@ export const findProjectIssue = cache(async (orgParam: string, projectParam: str
   const inUrl = { slug: projectSlug, organisation: { slug: orgSlug } };
   const scope = await viewerBugScope();
   if (!("organisationId" in scope)) {
-    const rows = await prisma.bug.findMany({ where: { number, isDeleted: false, project: { ...inUrl, archivedAt: null }, organisation: { archivedAt: null } }, select, take: 2 });
+    // Signed out, only a public project's issues resolve (#access-control).
+    const rows = await prisma.bug.findMany({ where: { number, isDeleted: false, project: { ...inUrl, archivedAt: null, visibility: "public" }, organisation: { archivedAt: null } }, select, take: 2 });
     return rows.length === 1 ? { kind: "found", issue: toIssue(rows[0]) } : null;
   }
 

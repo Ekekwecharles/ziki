@@ -197,7 +197,7 @@ describe("organisationNextStep: the one next thing, from who you are", () => {
     expect(card?.href).toBe("/settings/connect");
   });
 
-  it("leaves it to AgentSetupNotice when an agent is blocked: no second card", () => {
+  it("leaves it to the agents bar when an agent is blocked: no card", () => {
     expect(ask({ agentCount: 1, blockedAgentCount: 1, memberCount: 1 })).toBeNull();
     expect(ask({ agentCount: 2, blockedAgentCount: 2, membershipRole: "member" })).toBeNull();
   });

@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { LiveRefresh } from "@/components/live-refresh";
 import { Badge } from "@/components/ui/badge";
-import { FixOnZiki } from "@/components/security-checks/fix-on-ziki";
+import { IssueActionsMenu } from "@/components/issue-actions-menu";
+import { RemoveScanButton } from "@/components/security-checks/remove-scan-button";
+import { QuickScanList } from "@/components/security-checks/preview-result";
+import { LiveCheckCard } from "@/components/security-checks/live-check-card";
+import { ReportLive } from "@/components/security-checks/report-live";
 import { ReportProgress } from "@/components/security-checks/report-progress";
-import { ReportResults, parseFixFilter } from "@/components/security-checks/report-results";
+import { ReportResults } from "@/components/security-checks/report-results";
 import { ReportSummary } from "@/components/security-checks/report-summary";
 import { requireUser } from "@/lib/auth-helpers";
 import { substatusClass } from "@/lib/labels";
@@ -15,26 +18,16 @@ import { orgCard } from "../../../[org]/[project]/org/org-ui";
 
 export const metadata = { title: "Security check" };
 
-/** What each step tells the client while there are no parts to list yet. */
-const WAITING_NOTE: Partial<Record<keyof typeof CHECK_STATUS_LABEL, string>> = {
-  queued: "An agent will start planning the checks soon.",
-  splitting: "An agent is looking at it and planning the checks.",
-};
-
 /**
- * One security check (#security-checks, part 4): how far the agents have got
- * and, once the report is posted (#648), what was found, worst first. Only the person who asked
- * for the check sees it. Until it is paid, the findings are the teaser that
- * `loadCheckReport` builds.
+ * One security check (12 and 14 Nov plans, part S): live progress and the
+ * quick scan while Ziki checks, then, once the report is posted, Ziki's
+ * one-line summary and every finding worst first. The report is free; clients
+ * pay only to have findings fixed (14 Nov call).
+ * The report never goes away; moved findings are marked. Only the person who
+ * asked for the check sees it.
  */
-export default async function SecurityCheckPage({
-  params,
-  searchParams,
-}: {
-  params: Promise<{ id: string }>;
-  searchParams: Promise<{ show?: string | string[] }>;
-}) {
-  const [{ id }, { show }, user] = await Promise.all([params, searchParams, requireUser()]);
+export default async function SecurityCheckPage({ params }: { params: Promise<{ id: string }> }) {
+  const [{ id }, user] = await Promise.all([params, requireUser()]);
   const access = await currentOrganisationAccess(user.id, user.role);
   if (!access.organisationId) notFound();
   const report = await loadCheckReport(id, access.organisationId, user.id);
@@ -46,9 +39,11 @@ export default async function SecurityCheckPage({
 
   return (
     <div className="flex w-full flex-col gap-4 pb-10 sm:gap-6">
-      {working ? <LiveRefresh /> : null}
-      {/* Same look as the issue pages' breadcrumb (components/project-breadcrumb.tsx). */}
-      <nav aria-label="Breadcrumb" className="flex w-full items-center px-0.5 text-[13px] text-zk-text2">
+      {/* Live until the report is posted; a cancelled check has nothing more to show. */}
+      {working && !report.posted ? <ReportLive /> : null}
+      {/* Same look as the issue pages' breadcrumb (components/project-breadcrumb.tsx), with the same "More actions" menu on the right. */}
+      <div className="flex w-full items-center justify-between gap-3">
+      <nav aria-label="Breadcrumb" className="flex min-w-0 items-center px-0.5 text-[13px] text-zk-text2">
         <ol className="flex min-w-0 flex-wrap items-center gap-0.5">
           <li className="min-w-0">
             <Link
@@ -62,7 +57,15 @@ export default async function SecurityCheckPage({
           <li aria-current="page" className="truncate px-1.5">{report.target.value}</li>
         </ol>
       </nav>
+      {/* Remove sits here, like Delete issue on an issue page, for any scan that isn't removed yet. */}
+      {report.status !== "cancelled" ? (
+        <IssueActionsMenu>
+          <RemoveScanButton checkId={report.checkId} site={report.target.value} posted={report.posted} />
+        </IssueActionsMenu>
+      ) : null}
+      </div>
 
+      {/* Only while ownership proof is on: with it off, the report shows such a check as waiting to start. */}
       {report.status === "awaiting_ownership" ? (
         <section aria-labelledby="ownership-heading" className={orgCard}>
           <Badge className={substatusClass.requires_confirmation}>{CHECK_STATUS_LABEL.awaiting_ownership}</Badge>
@@ -76,35 +79,24 @@ export default async function SecurityCheckPage({
         </section>
       ) : (
         <>
-          <ReportSummary report={report} />
+          {/* A running check is one card (headline, something always moving, the numbers and each part); otherwise the summary on top. */}
+          {working && !report.posted ? <LiveCheckCard report={report} /> : <ReportSummary report={report} />}
 
-          {/* Progress only, until an agent has summed up every part and posted the report. */}
-          {!report.posted ? (
+          {/* The quick scan from when it was added, until the agents' report replaces it (14 Nov plan). */}
+          {!report.posted && report.quickScan ? <QuickScanList summary={report.quickScan} /> : null}
+
+          {/* A check that was cancelled keeps its parts; a running one shows them inside its card. */}
+          {!report.posted && !working ? (
             <section aria-labelledby="progress-heading" className={orgCard}>
               <h2 id="progress-heading" className="text-base font-semibold text-zk-text">Progress</h2>
               <div className="mt-3">
-                {report.parts.length ? (
-                  <>
-                    <ReportProgress progress={report.progress} parts={report.parts} />
-                    {working && report.progress.done === report.progress.total ? (
-                      <p className="mt-3 text-sm text-zk-text2">Every part is checked. An agent is writing your report.</p>
-                    ) : null}
-                  </>
-                ) : (
-                  <p className="text-sm text-zk-text2">{WAITING_NOTE[report.status] ?? "No parts to check yet."}</p>
-                )}
+                {report.parts.length ? <ReportProgress progress={report.progress} parts={report.parts} /> : <p className="text-sm text-zk-text2">No parts were checked.</p>}
               </div>
             </section>
           ) : null}
 
-          {report.posted ? <ReportResults report={report} show={parseFixFilter(show)} /> : null}
+          {report.posted ? <ReportResults report={report} /> : null}
 
-          {/* Fix on Ziki (part 5, #647): paid, and so posted, checks only. "Fix them on Ziki" above jumps here. */}
-          {report.paid ? (
-            <div id="fix-on-ziki" className="scroll-mt-20 rounded-lg bg-zk-surface">
-              <FixOnZiki checkId={report.checkId} results={report.results.map(({ id, severity, title }) => ({ id, severity, title }))} />
-            </div>
-          ) : null}
         </>
       )}
     </div>

@@ -1,4 +1,5 @@
 import { parseTrackFilter, trackFilter } from "@/lib/marketing/track";
+import { GUEST_BLOCKED_ACTIONS, GUEST_BLOCKED_MESSAGE } from "@/lib/agents/guest-access";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import type { AgentLevel, Prisma } from "@prisma/client";
@@ -128,6 +129,10 @@ export async function agentIssueRequest(
   try {
     agent = await requireAgent(request);
     requireLevel(agent, level === "read" ? "working" : level);
+    // On-call guests (12 Nov plan, D2): nothing that outlasts the stay.
+    if (agent.guest && GUEST_BLOCKED_ACTIONS.has(action)) {
+      throw new IssueApiError(403, GUEST_BLOCKED_MESSAGE, { error: "guest_not_allowed", message: GUEST_BLOCKED_MESSAGE });
+    }
     if (agent.pausedAt && action !== "claims.heartbeat" && (action === "work.read" || level !== "read" || options.budget === "write")) {
       throw new IssueApiError(423, "This agent is paused by its owner.");
     }
@@ -206,6 +211,7 @@ export async function issueProject(agent: AgentContext, params: URLSearchParams,
 
 type Scope = { organisationId: string; projectId: string };
 export const issueSelect = {
+  outsideWork: { select: { agentId: true, initialState: true, createdAt: true } },
   id: true, number: true, title: true, summary: true, description: true, status: true, substatus: true, difficulty: true, track: true,
   // Marketing work: the revision rounds used so far (D4).
   revisionCount: true,

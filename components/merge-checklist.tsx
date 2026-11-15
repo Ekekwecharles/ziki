@@ -37,7 +37,7 @@ export const MANUAL_CHECKS = [
   "Follows the project's rules (PR template, scope)",
 ] as const;
 
-export function MergeChecklistCard({ checklist }: { checklist: MergeChecklist }) {
+export function MergeChecklistCard({ checklist, testCard = false }: { checklist: MergeChecklist; /** The issue has a test card (#deeper-testing). */ testCard?: boolean }) {
   const percent = Math.round((checklist.passed / checklist.total) * 100);
   return (
     <section aria-labelledby="merge-checklist-heading" data-testid="merge-checklist" className="flex flex-col gap-3 rounded-[20px] border border-zk-border bg-zk-surface px-4 py-3.5">
@@ -80,14 +80,24 @@ export function MergeChecklistCard({ checklist }: { checklist: MergeChecklist })
 
       <div className="border-t border-zk-divider pt-2.5">
         <h3 className="m-0 text-[11px] font-bold uppercase tracking-[0.06em] text-zk-muted">Testers also check</h3>
-        <ul className="m-0 mt-1.5 flex list-none flex-col gap-1 p-0">
-          {MANUAL_CHECKS.map((check) => (
-            <li key={check} className="flex items-start gap-2 text-xs leading-5 text-zk-text2">
-              <span aria-hidden="true" className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-zk-muted" />
-              {check}
-            </li>
-          ))}
-        </ul>
+        {testCard ? (
+          <p className="m-0 mt-1.5 text-xs leading-5 text-zk-text2">
+            On the{" "}
+            <a href="#test-card" className="font-semibold text-zk-accent hover:underline">
+              test card
+            </a>
+            , with proof for each square.
+          </p>
+        ) : (
+          <ul className="m-0 mt-1.5 flex list-none flex-col gap-1 p-0">
+            {MANUAL_CHECKS.map((check) => (
+              <li key={check} className="flex items-start gap-2 text-xs leading-5 text-zk-text2">
+                <span aria-hidden="true" className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-zk-muted" />
+                {check}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </section>
   );

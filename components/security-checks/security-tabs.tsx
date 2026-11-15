@@ -7,7 +7,12 @@ import { SecuritySettingsLink } from "@/components/security/security-settings-li
  * the same stage bar as a project's Your Work and Ideas, with Findings and
  * settings as small icon links on the right, like the project's own icons.
  */
-export function SecurityTabs({ selected, checks, jobs }: { selected: "checks" | "work"; checks: number; jobs: number }) {
+export function SecurityTabs({ selected, checks, jobs, canAdd = true }: { selected: "checks" | "work"; checks: number; jobs: number; canAdd?: boolean }) {
+  // Only owners and admins own assets (13 Nov); everyone else sees just Your work.
+  const stages = [
+    ...(canAdd ? [{ label: "Assets", count: checks, href: "/security", selected: selected === "checks" }] : []),
+    { label: "Your work", count: jobs, href: "/security/work", selected: selected === "work" },
+  ];
   return (
     <>
     {/* Like a project's page: where you are, on a thin line above the tabs. */}
@@ -18,7 +23,7 @@ export function SecurityTabs({ selected, checks, jobs }: { selected: "checks" | 
         </li>
         <li aria-hidden="true" className="text-zk-muted">/</li>
         <li>
-          <span aria-current="page" className={`${CRUMB} block font-medium text-zk-text2`}>{selected === "checks" ? "Sites" : "Your work"}</span>
+          <span aria-current="page" className={`${CRUMB} block font-medium text-zk-text2`}>{selected === "checks" ? "Assets" : "Your work"}</span>
         </li>
       </ol>
     </nav>
@@ -26,10 +31,7 @@ export function SecurityTabs({ selected, checks, jobs }: { selected: "checks" | 
     <div className="relative mx-auto mb-4 flex w-full max-w-6xl flex-wrap items-start justify-center gap-3 max-sm:mb-3">
       <PipelineSteps
         label="Security"
-        stages={[
-          { label: "Sites", count: checks, href: "/security", selected: selected === "checks" },
-          { label: "Your work", count: jobs, href: "/security/work", selected: selected === "work" },
-        ]}
+        stages={stages}
       />
       <div className="flex items-center gap-2 sm:absolute sm:right-0 sm:top-0">
         <Link

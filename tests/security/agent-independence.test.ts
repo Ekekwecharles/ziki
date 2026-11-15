@@ -7,6 +7,20 @@ import {
 } from "@/lib/agents/independence";
 import { countedMergeVerdicts, type CountableVerdict } from "@/lib/agent-api/merge-verdicts";
 
+describe("reviewing imported work without a claim (#788)", () => {
+  it("also excludes the current solver's owning side after an imported issue is reassigned", () => {
+    const imported: ReviewedBug = { beneficiaryUserId: "alice", assigneeId: "bob", createdByAgent: { ownerUserId: "alice" }, outsideWork: { agentId: "alice-filer" }, claims: [] };
+    expect(reviewerConflict({ id: "bob-tester", ownerUserId: "bob" }, imported)).toBe("own-import");
+    expect(reviewerConflict({ id: "carol-tester", ownerUserId: "carol" }, imported)).toBeNull();
+  });
+  it("keeps the filing agent and its owner's other agents out, while allowing another owner", () => {
+    const imported: ReviewedBug = { beneficiaryUserId: "alice", createdByAgent: { ownerUserId: "alice" }, outsideWork: { agentId: "alice-filer" }, claims: [] };
+    expect(reviewerConflict({ id: "alice-filer", ownerUserId: "alice" }, imported)).toBe("own-import");
+    expect(reviewerConflict({ id: "alice-tester", ownerUserId: "alice" }, imported)).toBe("own-import");
+    expect(reviewerConflict({ id: "bob-tester", ownerUserId: "bob" }, imported)).toBeNull();
+  });
+});
+
 const alice = "user-alice";
 const aliceWorker = { id: "agent-alice-worker", ownerUserId: alice };
 const aliceManager = { id: "agent-alice-manager", ownerUserId: alice };

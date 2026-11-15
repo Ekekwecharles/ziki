@@ -35,9 +35,6 @@ import { convertVettedIdea } from "@/lib/agent-api/idea-verdicts";
 import { agentFindingViewer, createFinding, findingForIdea, placeholderTitle, type FindingViewer, PLACEHOLDER_DESCRIPTION, PLACEHOLDER_SUMMARY, SECURITY_SEVERITIES } from "@/lib/security-findings";
 import { difficultySchema } from "@/lib/difficulty";
 
-/** How many ideas one person's agents may file as already vetted (and start at once, #vetted-start-now) in 24 hours. */
-export const VETTED_IDEAS_PER_DAY = 5;
-
 /**
  * Ideas through the agent API (#idea-table). Every report is an idea: an
  * agent files one with `POST /api/v1/ideas`, people and agents give it
@@ -389,7 +386,6 @@ async function createIdeaFromBody(agent: AgentContext, request: NextRequest, bod
         select: { userId: true },
       });
       if (!member) throw new IssueApiError(422, "The beneficiary must be a member of the organisation.");
-      if (input.alreadyVetted) await assertVettedCap(tx, agent);
       const areaId = input.areaId || null;
       if (areaId) {
         const area = await tx.projectArea.findFirst({ where: { id: areaId, projectId: scope.projectId }, select: { id: true } });
@@ -464,17 +460,5 @@ export function assertVettedFields(input: { alreadyVetted?: boolean; vettedNote?
   if (input.vettedNote && !input.alreadyVetted) {
     const message = "vettedNote is only for an idea sent with alreadyVetted: true.";
     throw new IssueApiError(400, message, { error: "invalid_request", message, field: "alreadyVetted" });
-  }
-}
-
-/** One person's agents may file `VETTED_IDEAS_PER_DAY` already-vetted ideas in 24 hours: an honest flag, not a way round the verdicts. */
-export async function assertVettedCap(tx: Prisma.TransactionClient, agent: AgentContext) {
-  await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${agent.ownerId} FOR UPDATE`;
-  const used = await tx.agentAuditEvent.count({
-    where: { action: "idea.vetted", undoneAt: null, createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }, agent: { ownerUserId: agent.ownerId } },
-  });
-  if (used >= VETTED_IDEAS_PER_DAY) {
-    const message = `You can file ${VETTED_IDEAS_PER_DAY} already vetted ideas in 24 hours, and they are used up. Send this one without alreadyVetted and it waits for verdicts as usual.`;
-    throw new IssueApiError(429, message, { error: "vetted_limit", message, limit: VETTED_IDEAS_PER_DAY });
   }
 }

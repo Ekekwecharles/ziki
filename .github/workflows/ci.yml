@@ -83,6 +83,8 @@ jobs:
           DATABASE_URL: "postgresql://dummy:dummy@localhost:5432/dummy"
           AUTH_SECRET: "ci-build-secret-dummy-must-be-long-enough-32-chars"
           NEXTAUTH_URL: "http://localhost:3000"
+          # The build runs near Node's default memory limit and sometimes fails with "JavaScript heap out of memory".
+          NODE_OPTIONS: "--max-old-space-size=6144"
         run: pnpm build
 
   # The CLI scenarios (cli/tests) drive the real agent API through `pnpm ziki`.
@@ -244,6 +246,8 @@ jobs:
         # The ci job type-checks this commit; skip next build's duplicate check (next.config.ts).
         env:
           SKIP_BUILD_TYPECHECK: "1"
+          # The build ran out of memory on the runner ("JavaScript heap out of memory"), which skipped the deploy.
+          NODE_OPTIONS: "--max-old-space-size=6144"
         run: pnpm build
 
       - name: Run end-to-end tests

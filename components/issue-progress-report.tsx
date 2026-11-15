@@ -215,6 +215,7 @@ export function IssueProgressReport({
   currentStage,
   setback = false,
   live,
+  skippedStages = {},
 }: {
   decisions: ReadonlyArray<AgentDecision>;
   /**
@@ -225,6 +226,8 @@ export function IssueProgressReport({
   entryCounts?: Partial<Record<DecisionStage, number>>;
   /** Where the issue is now; marked "now" in the stepper. */
   currentStage: DecisionStage;
+  /** Real omissions recorded at import; they never count as successful reviews. */
+  skippedStages?: Partial<Record<DecisionStage, string>>;
   /** The current stage went backwards, e.g. a merger asked for changes. */
   setback?: boolean;
   /**
@@ -254,19 +257,20 @@ export function IssueProgressReport({
         </div>
         <ol className="pg" aria-label="Progress report: pick a stage to see its entries">
           {steps.map((stage, index) => {
-            const checked = stage === "live" ? live : undefined;
-            const state = checked?.state ?? stageState(stage, currentStage, setback);
             const tally = tallies[stage];
             const logs = entryCounts[stage] ?? tally.positive + tally.negative;
+            const skipped = logs === 0 ? skippedStages[stage] : undefined;
+            const checked = stage === "live" ? live : undefined;
+            const state = skipped ? "todo" : checked?.state ?? stageState(stage, currentStage, setback);
             const on = stage === selected;
-            const icon: IconName = state === "done" ? "check" : state === "warn" ? (checked ? "alert" : "undo") : stageIconName[stage];
+            const icon: IconName = skipped ? "undo" : state === "done" ? "check" : state === "warn" ? (checked ? "alert" : "undo") : stageIconName[stage];
             const isNow = checked ? state !== "done" : index === currentIndex;
             return (
               <li key={stage} style={{ animationDelay: `${index * 70}ms` }}>
                 <button
                   type="button"
                   aria-pressed={on}
-                  title={decisionStageInfo[stage].description}
+                  title={skipped ?? decisionStageInfo[stage].description}
                   onClick={() => picked?.setStage(stage)}
                   className={`pgs${isNow ? " now" : ""}${state === "warn" ? " warn" : ""}${
                     state === "todo" ? " todo" : ""
@@ -277,10 +281,10 @@ export function IssueProgressReport({
                   </span>
                   <span className="pgl">{decisionStageInfo[stage].label}</span>
                   <span className="pgn" style={checked?.state === "warn" ? { color: "var(--zk-warn-fg)" } : undefined}>
-                    {checked ? checked.caption : index > currentIndex && !logs ? null : entryCount(logs, decisionStageInfo[stage].entry)}
+                    {skipped ? "Skipped: outside work" : checked ? checked.caption : index > currentIndex && !logs ? null : entryCount(logs, decisionStageInfo[stage].entry)}
                   </span>
                   <span className="sr-only">
-                    {decisionStageInfo[stage].label}: {tally.positive} positive, {tally.negative} negative
+                    {skipped ?? `${decisionStageInfo[stage].label}: ${tally.positive} positive, ${tally.negative} negative`}
                   </span>
                 </button>
               </li>

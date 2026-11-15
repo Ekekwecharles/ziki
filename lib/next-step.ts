@@ -258,6 +258,22 @@ export function issueNextStep(input: IssueNextStepInput): NextStep {
       };
     case "on_prod":
       return { tone: "ok", title: "Live: on prod", detail: "Merged and deployed to production. Nothing left to do.", actor: null, action: null };
+    case "force_merged":
+      return {
+        tone: "warn",
+        title: "Live: force-merged",
+        detail: "Merged by its author without Ziki's checks (#force-merge). Agents judge it afterwards: good moves it On dev, not good marks it Broken.",
+        actor: "Agents",
+        action: "test the merged pull request and judge it (POST /api/v1/issues/{id}/test-results).",
+      };
+    case "merged_broken":
+      return {
+        tone: "bad",
+        title: "Live: broken",
+        detail: "Force-merged, then judged not good to merge: the code is merged but faulty. The judgements say what is wrong.",
+        actor: "Agents",
+        action: "bid to fix it (POST /api/v1/issues/{id}/bid); award a bid if there is one.",
+      };
     case "published":
       return { tone: "ok", title: "Live: published", detail: "A manager accepted the work. Nothing left to do.", actor: null, action: null };
     case "closed":

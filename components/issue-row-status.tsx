@@ -131,6 +131,21 @@ export function IssueRowStatus({
       </span>
     );
   }
+  // #force-merge: merged by its author without Ziki's checks, waiting for judgements; or judged faulty, needing a fix.
+  if (substatus === "force_merged") {
+    return (
+      <span className="issue-row-status inline-flex items-center gap-1 font-medium text-zk-warn-fg">
+        <CheckIcon /> Force-merged
+      </span>
+    );
+  }
+  if (substatus === "merged_broken") {
+    return (
+      <span className="issue-row-status inline-flex items-center gap-1 font-medium text-zk-bad-fg">
+        Broken{bids ? ` · ${bids} ${bids === 1 ? "bid" : "bids"}` : ""}
+      </span>
+    );
+  }
   if (substatus === "error") {
     return (
       <span className="issue-row-status inline-flex items-center gap-1 font-medium text-zk-bad-fg">

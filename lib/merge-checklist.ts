@@ -1,6 +1,7 @@
 import { linkStateFromUrl, REPORT_STALE_HOURS, type GateReport } from "@/lib/agent-api/pr-gate";
 import type { RepoRef } from "@/lib/github/pull-request-url";
 import { reportedAt } from "@/lib/agent-api/pull-request-report";
+import { sameCommit } from "@/lib/github/commit-sha";
 
 /**
  * The ready-to-merge checklist (#merge-checklist).
@@ -93,12 +94,12 @@ export function mergeChecklist(
   const head: ChecklistItem = {
     key: "head",
     label: "Checked on the delivered commit",
-    state: !current?.headSha || !delivered ? "wait" : current.headSha === delivered ? "pass" : "fail",
+    state: !current?.headSha || !delivered ? "wait" : sameCommit(current.headSha, delivered) ? "pass" : "fail",
     detail: !current
       ? noReport
       : !current.headSha || !delivered
         ? "Commit not reported"
-        : current.headSha === delivered
+        : sameCommit(current.headSha, delivered)
           ? null
           : `Head moved: checked ${short(current.headSha)}, delivered ${short(delivered)}`,
   };

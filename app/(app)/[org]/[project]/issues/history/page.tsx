@@ -126,11 +126,7 @@ export default async function MergeHistoryPage({ params: routeParams, searchPara
     <div className="merge-history mx-auto max-w-[1160px]">
       <div className="overflow-hidden rounded-[22px] border border-zk-divider bg-zk-surface">
         <div className="flex items-center justify-between gap-3 border-b border-zk-divider px-6 py-4 max-sm:px-4">
-          <nav aria-label="Breadcrumb" className="flex items-center gap-2.5 text-[15px]">
-            <Link href={issuesPath(project.ref, "all")} className="text-zk-muted hover:text-zk-text">Issues</Link>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="text-zk-muted"><path d="m9 18 6-6-6-6" /></svg>
-            <h1 aria-current="page" className="font-semibold text-zk-text">Merge history</h1>
-          </nav>
+          <h1 className="text-[15px] font-semibold text-zk-text">Merge history</h1>
         </div>
 
         <div className="merge-tabs flex items-center justify-between gap-3 px-6 pb-3.5 pt-5 max-sm:px-4">

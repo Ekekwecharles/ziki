@@ -11,6 +11,7 @@ import { pullRequestReportSchema, checkRunsSchema, pullRequestChecksSummary, typ
 import type { GateReport } from "@/lib/agent-api/pr-gate";
 import { moveTo } from "@/lib/issue-substatus";
 import { statusChangedSummary } from "@/lib/activity-log";
+import { sameCommit } from "@/lib/github/commit-sha";
 
 /**
  * Pull request reports (#pr-reports).
@@ -264,6 +265,7 @@ export async function reportPullRequestStatus(
       beneficiaryUserId: true,
       reporterId: true,
       assigneeId: true,
+      outsideWork: { select: { agentId: true } },
       createdByAgent: { select: { ownerUserId: true } },
       claims: { select: { status: true, releasedAt: true, beneficiaryUserId: true, agentId: true, dispatcherUserId: true, agent: { select: { ownerUserId: true } } } },
     },
@@ -289,7 +291,7 @@ export async function reportPullRequestStatus(
   });
   if (delivered) return fail(403, "not_independent", "This agent delivered this pull request, so another agent reports on it, your owner's other agents included.");
 
-  const headMoved = body.state === "open" && body.headSha !== undefined && body.headSha !== bug.pullRequestHeadSha;
+  const headMoved = body.state === "open" && body.headSha !== undefined && !sameCommit(body.headSha, bug.pullRequestHeadSha);
   const pullRequestUrl = bug.pullRequestUrl;
 
   const saved = await prisma.$transaction(async (tx) => {

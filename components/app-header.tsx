@@ -25,9 +25,6 @@ import { Avatar } from "@/components/avatar";
 import { AccountThemeSelector } from "@/components/theme-toggle";
 import { CookieSettingsLink } from "@/components/consent-banner";
 import { VersionCredits } from "@/components/credits-dialog";
-import { recentNotificationsAction } from "@/app/actions/notifications";
-import { LocalTime } from "@/components/local-time";
-import { BASE_PATH } from "@/lib/base-path";
 import { PAGE_CONTAINER_CLASS } from "@/components/page-container";
 import { ZikiMark } from "@/components/ziki-mark";
 import { formatZ } from "@/lib/points/rules";
@@ -164,118 +161,33 @@ function TopNav({ pathname, projectSlug }: { pathname: string | null; projectSlu
           <path d="m15.5 8.5-2 5-5 2 2-5 5-2Z" />
         </NavIcon>
       </TopNavLink>
-      <TopNavLink href="/forum" active={isNavItemActive(pathname, "/forum")} label="Forum">
-        <NavIcon>
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-        </NavIcon>
-      </TopNavLink>
     </nav>
   );
 }
 
-/** In-place notification preview; opening the bell never marks alerts read (#615). */
-/** The envelope (#inbox): a preview of recent notifications; its count is unread notifications plus escalations waiting on you. */
+/** The envelope (#inbox): opens the inbox straight away; its count is unread notifications plus escalations waiting on you. */
 function InboxEnvelope({ unreadCount, pendingEscalations, active }: { unreadCount: number; pendingEscalations: number; active: boolean }) {
-  const [open, setOpen] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-  const [notifications, setNotifications] = useState<Awaited<ReturnType<typeof recentNotificationsAction>> | null>(null);
-  const [failed, setFailed] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-  useDismiss(open, () => setOpen(false), containerRef, triggerRef);
-
-  useEffect(() => {
-    if (!open) return;
-    panelRef.current?.focus({ preventScroll: true });
-    let cancelled = false;
-    recentNotificationsAction().then(
-      (items) => { if (!cancelled) setNotifications(items); },
-      () => { if (!cancelled) setFailed(true); },
-    );
-    return () => { cancelled = true; };
-  }, [open, attempt]);
-
-  function loadPreview() {
-    setNotifications(null);
-    setFailed(false);
-  }
   const total = unreadCount + pendingEscalations;
   const label = total > 0 ? `Inbox, ${total} unread` : "Inbox";
   return (
-    <div ref={containerRef} className="flex items-center sm:relative" onBlur={(event) => {
-      if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false);
-    }}>
-      <button
-        ref={triggerRef}
-        type="button"
-        aria-expanded={open}
-        aria-controls="notification-preview"
-        onClick={() => { loadPreview(); setOpen((value) => !value); }}
-        aria-label={label}
-        title={label}
-        // A plain icon, no ring: the bell only needs to be findable, not prominent.
-        className={`relative inline-flex h-9 w-9 items-center justify-center rounded-full hover:bg-zk-chip ${linkFocus} ${active ? "text-zk-accent" : "text-zk-text"}`}
-      >
-        <EnvelopeIcon />
-        {total > 0 ? (
-          <span
-            aria-hidden="true"
-            className="absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-zk-surface bg-electric-blue-strong px-1 text-[11px] font-bold text-white"
-          >
-            {total > 99 ? "99+" : total}
-          </span>
-        ) : null}
-      </button>
-      {open ? (
-        <div
-          ref={panelRef}
-          id="notification-preview"
-          role="region"
-          aria-label="Recent notifications"
-          tabIndex={-1}
-          className="absolute right-4 top-full z-50 mt-2 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-zk-border bg-zk-surface text-zk-text shadow-xl focus:outline-none sm:right-0"
+    <Link
+      href="/inbox"
+      aria-label={label}
+      title={label}
+      aria-current={active ? "page" : undefined}
+      // A plain icon, no ring: the envelope only needs to be findable, not prominent.
+      className={`relative inline-flex h-9 w-9 items-center justify-center rounded-full hover:bg-zk-chip ${linkFocus} ${active ? "text-zk-accent" : "text-zk-text"}`}
+    >
+      <EnvelopeIcon />
+      {total > 0 ? (
+        <span
+          aria-hidden="true"
+          className="absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-zk-surface bg-electric-blue-strong px-1 text-[11px] font-bold text-white"
         >
-          <h2 className="border-b border-zk-border px-4 py-3 text-sm font-semibold">Notifications</h2>
-          {pendingEscalations > 0 ? (
-            <Link href="/inbox?tab=escalations" onClick={() => setOpen(false)} className={`block border-b border-zk-border bg-zk-warn-bg px-4 py-2.5 text-sm font-semibold text-zk-warn-fg hover:brightness-95 ${linkFocus}`}>
-              {pendingEscalations} escalation{pendingEscalations === 1 ? "" : "s"} waiting on you
-            </Link>
-          ) : null}
-          <div className="max-h-[min(26rem,calc(100dvh-11rem))] overflow-y-auto overscroll-contain">
-            {failed ? (
-              <div className="p-4 text-sm">
-                <p role="alert">Could not load notifications.</p>
-                <button type="button" className={`mt-2 text-zk-accent hover:underline ${linkFocus}`} onClick={() => { loadPreview(); setAttempt((value) => value + 1); }}>Try again</button>
-              </div>
-            ) : notifications === null ? (
-              <p role="status" className="p-4 text-sm text-zk-muted">Loading notifications...</p>
-            ) : notifications.length === 0 ? (
-              <p role="status" className="p-4 text-sm text-zk-muted">No notifications yet.</p>
-            ) : (
-              <ul className="divide-y divide-zk-divider">
-                {notifications.map((notification) => (
-                  <li key={notification.id}>
-                    {/* Plain links avoid prefetching the route that marks an alert read. */}
-                    <a href={`${BASE_PATH}/inbox/notifications/${notification.id}`} className={`flex items-start gap-3 px-4 py-3 text-sm hover:bg-zk-chip ${linkFocus} ${!notification.readAt ? "bg-zk-tint" : ""}`}>
-                      <span aria-hidden="true" className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${!notification.readAt ? "bg-electric-blue" : "bg-transparent"}`} />
-                      <span className="min-w-0 flex-1">
-                        <span className={`block break-words ${!notification.readAt ? "font-medium text-zk-text" : "text-zk-text2"}`}>
-                          {!notification.readAt ? <span className="sr-only">Unread: </span> : null}
-                          {notification.title}
-                        </span>
-                        <LocalTime date={notification.createdAt} className="mt-1 block text-xs text-zk-muted" />
-                      </span>
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          <Link href="/inbox" onClick={() => setOpen(false)} className={`block border-t border-zk-border px-4 py-3 text-sm font-medium text-zk-accent hover:bg-zk-chip ${linkFocus}`}>Open inbox</Link>
-        </div>
+          {total > 99 ? "99+" : total}
+        </span>
       ) : null}
-    </div>
+    </Link>
   );
 }
 

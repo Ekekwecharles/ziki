@@ -78,6 +78,19 @@ describe("mergeChecklist (#merge-checklist)", () => {
     expect(list.items.find((it) => it.key === "head")?.state).toBe("fail");
   });
 
+  it("passes the head check when the delivery sent a short ID of the reported commit (#921)", () => {
+    const list = mergeChecklist(sampleReport(), { ...ISSUE, pullRequestHeadSha: HEAD.slice(0, 8) }, now);
+    const head = list.items.find((it) => it.key === "head");
+    expect(head?.state).toBe("pass");
+    expect(head?.detail).toBeNull();
+    expect(list.headline).not.toContain("Head moved");
+  });
+
+  it("still fails the head check when a short delivered ID names another commit (#921)", () => {
+    const list = mergeChecklist(sampleReport(), { ...ISSUE, pullRequestHeadSha: "fedcba98" }, now);
+    expect(list.items.find((it) => it.key === "head")?.state).toBe("fail");
+  });
+
   it("blocks when CI checks are failing", () => {
     const list = mergeChecklist(
       sampleReport({ checks: "failing" }),

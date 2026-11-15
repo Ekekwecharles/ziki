@@ -1,16 +1,15 @@
+import Link from "next/link";
 import type { SecuritySeverity } from "@prisma/client";
 import "@/components/security-finding.css";
 import { Badge } from "@/components/ui/badge";
 import { LocalTime } from "@/components/local-time";
-import { RichText } from "@/components/rich-text";
-import { LockedPdfButton } from "@/components/security-checks/report-pdf-locked";
 import { statusClass, substatusClass } from "@/lib/labels";
 import { CHECK_STATUS_LABEL, FINISHED_CHECK_STATUSES } from "@/lib/security-checks";
-import type { CheckReport } from "@/lib/security-checks/report";
+import type { CheckReport, PostedReport } from "@/lib/security-checks/report";
 import { SECURITY_SEVERITIES, SEVERITY_LABEL } from "@/lib/security-severity";
 
 /** Ziki's issue status colours, by meaning: waiting on someone like Requires confirmation, working like In progress, finished like Live. */
-const STATUS_CLASS: Record<CheckReport["status"], string> = {
+export const STATUS_CLASS: Record<CheckReport["status"], string> = {
   awaiting_ownership: substatusClass.requires_confirmation,
   queued: substatusClass.requires_confirmation,
   splitting: statusClass.in_progress,
@@ -22,10 +21,7 @@ const STATUS_CLASS: Record<CheckReport["status"], string> = {
 const PRIMARY_BUTTON =
   "inline-flex h-10 items-center justify-center gap-2 rounded-full bg-electric-blue-strong px-5 text-sm font-bold text-white hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2";
 
-const SECONDARY_BUTTON =
-  "inline-flex h-10 items-center justify-center gap-2 rounded-full border border-zk-border bg-zk-surface px-5 text-sm font-bold text-zk-text hover:bg-zk-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue focus-visible:ring-offset-2";
-
-/** "52 min", "2 h 5 min", "3 days": how long the agents took. */
+/** "52 min", "2 h 5 min", "3 days": how long the check took. */
 function duration(from: Date, to: Date): string {
   const minutes = Math.max(1, Math.round((to.getTime() - from.getTime()) / 60_000));
   if (minutes < 60) return `${minutes} min`;
@@ -38,15 +34,14 @@ function duration(from: Date, to: Date): string {
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
 /**
- * The top of a security check's page (#security-checks, part 4): where it
- * stands, what was found in one line, the counts by severity, and the report
- * download (locked until paid). Before the report is posted (#648) it says
- * only where the check stands; once paid, the agent's summary sits here too.
+ * The top of a security check's page (12 and 14 Nov plans, part S). While
+ * Ziki checks, only where the check stands. Once the report is posted: Ziki's
+ * one-line summary, the counts by severity and the full PDF. The report is
+ * free; clients pay only to have findings fixed.
  */
 export function ReportSummary({ report }: { report: CheckReport }) {
   const finished = FINISHED_CHECK_STATUSES.has(report.status);
   const site = report.target.value;
-  const worst = report.paid ? report.results[0] : report.teaser;
   const statusText =
     report.status === "done" && report.startedAt && report.finishedAt
       ? `Check finished · ${duration(report.startedAt, report.finishedAt)}`
@@ -57,12 +52,11 @@ export function ReportSummary({ report }: { report: CheckReport }) {
   const headline = !report.posted
     ? report.status === "cancelled"
       ? `No report for ${site}`
-      : `Checking ${site}`
+      : `Ziki is checking ${site}`
     : report.total === 0
-      ? finished
-        ? `No problems found on ${site}`
-        : `Checking ${site}`
-      : `We found ${plural(report.total, "thing")} to fix on ${site}${finished ? "" : " so far"}`;
+      ? `No problems found on ${site}`
+      : `We found ${plural(report.total, "thing")} to fix on ${site}`;
+
 
   return (
     <section aria-labelledby="check-headline" className="rounded-[20px] border border-zk-border bg-zk-surface p-4 sm:p-6">
@@ -73,25 +67,23 @@ export function ReportSummary({ report }: { report: CheckReport }) {
             <span>
               <LocalTime date={report.createdAt} absolute />
               {report.progress.total ? ` · ${plural(report.progress.total, "check")}` : ""}
-              {report.agentCount ? ` · ${plural(report.agentCount, "agent")}` : ""}
             </span>
           </p>
           {/* Ziki's big headline style (as on Coming soon): bigger and heavier than a page title. */}
           <h1 id="check-headline" className="wrap-break-word text-2xl font-extrabold tracking-[-0.02em] text-zk-text sm:text-[28px]">
             {headline}
           </h1>
-          {report.paid && report.summary ? (
-            <RichText content={report.summary} className="text-sm text-zk-text" />
-          ) : null}
-          {worst ? (
+          {/* One clear line (14 Nov call); the coloured counts below say the rest, and the PDF has Ziki's summary. */}
+          {report.posted ? (
             <p className="text-sm text-zk-text2">
-              Start with the {SEVERITY_LABEL[worst.severity].toLowerCase()} one: {worst.title}.
+              We checked {plural(report.progress.total, "part")} of {site} and found{" "}
+              {report.total ? plural(report.total, "problem") : "no problems"}.
             </p>
           ) : !report.posted && !finished ? (
             <p className="text-sm text-zk-text2">Your report shows here once every part is checked.</p>
           ) : null}
-          {report.paid && report.results.some((result) => result.fix) ? <FixingLine results={report.results} /> : null}
-          {report.total || report.clearParts.length ? (
+          {report.posted ? <FixingLine report={report} /> : null}
+          {report.posted && (report.total || report.clearParts.length) ? (
             <ul aria-label="Results by severity" className="flex flex-wrap gap-1.5 pt-1">
               {SECURITY_SEVERITIES.filter((level) => report.counts[level] > 0).map((level) => (
                 <li key={level}>
@@ -110,53 +102,43 @@ export function ReportSummary({ report }: { report: CheckReport }) {
           ) : null}
         </div>
 
-        {report.posted ? (
-        <div className="flex shrink-0 flex-col gap-2 sm:min-w-56">
-          {report.paid ? (
-            // A plain link: a full download, not a client-side navigation.
-            <a href={`/security/checks/${report.checkId}/report.pdf`} className={PRIMARY_BUTTON}>
-              <DownloadIcon />
-              Download report
-            </a>
-          ) : (
-            <LockedPdfButton
-              payHref={`/security/checks/${report.checkId}/pay`}
-              priceCoins={report.priceCoins}
-              className={PRIMARY_BUTTON}
-              label="Download report"
-            />
-          )}
-          {report.paid ? (
-            // Jumps to Fix on Ziki (part 5, #647), the form below "What we found".
-            <a href="#fix-on-ziki" className={SECONDARY_BUTTON}>
-              Fix them on Ziki
-            </a>
-          ) : (
-            <LockedPdfButton
-              payHref={`/security/checks/${report.checkId}/pay`}
-              priceCoins={report.priceCoins}
-              className={SECONDARY_BUTTON}
-              label="Fix them on Ziki"
-              message="Fixing on Ziki comes with the full report."
-            />
-          )}
-          {/* One line on wider screens; on a phone it may wrap rather than run off the edge. */}
-          <p className="text-center text-xs text-zk-muted sm:whitespace-nowrap">Fixing on Ziki sends these to your board, privately.</p>
-        </div>
-        ) : null}
+        {report.posted ? <Actions report={report} /> : null}
       </div>
     </section>
   );
 }
 
-/** "Fixing: 2 of 5 sent to Ziki · 1 live": how far the sent problems' fixes have got (#security-findings). */
-function FixingLine({ results }: { results: { fix: { bucket: string } | null }[] }) {
-  const sent = results.filter((result) => result.fix).length;
-  const live = results.filter((result) => result.fix?.bucket === "fixed").length;
+/**
+ * The report's button: the full PDF. "Move to your app", where clients choose
+ * what to fix and pay, is Sanmi's page (14 Nov call); its button goes here
+ * once that page exists.
+ */
+function Actions({ report }: { report: PostedReport }) {
+  return (
+    <div className="flex shrink-0 flex-col gap-2 sm:min-w-56">
+      {/* A plain link: a full download, not a client-side navigation. */}
+      <a href={`/security/checks/${report.checkId}/report.pdf`} className={PRIMARY_BUTTON}>
+        <DownloadIcon />
+        Download report
+      </a>
+      {report.findings.length > 0 ? (
+        <Link href={`/security/checks/${encodeURIComponent(report.checkId)}/fix`} className={PRIMARY_BUTTON}>
+          Move to your app
+        </Link>
+      ) : null}
+    </div>
+  );
+}
+
+/** "2 of 5 moved to your app · 1 fixed": how far the moved problems' fixes have got (#security-findings). */
+function FixingLine({ report }: { report: PostedReport }) {
+  const sent = report.findings.filter((finding) => finding.fix);
+  if (!sent.length) return null;
+  const live = sent.filter((finding) => finding.fix?.bucket === "fixed").length;
   return (
     <p className="text-sm text-zk-text2">
-      <span className="font-semibold text-zk-text">Fixing:</span> {sent} of {results.length} sent to Ziki
-      {live ? ` · ${live} live` : ""}
+      <span className="font-semibold text-zk-text">{sent.length} of {report.findings.length}</span> moved to your app
+      {live ? ` · ${live} fixed` : ""}
     </p>
   );
 }

@@ -1,0 +1,45 @@
+name: Platform sweeps
+
+on:
+  schedule:
+    # Backstop for GitHub webhooks: refresh merge-queue state, dispatch
+    # webhooks, and run the other platform sweeps. Best-effort schedule;
+    # webhooks remain the fast path.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Call the cron endpoint
+        run: |
+          call() {
+            curl -sS --max-time 120 -w "\n%{http_code}" \
+              -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+              https://ziki.dev/api/internal/cron
+          }
+          # The sweep keeps running on the server even when the proxy times
+          # the request out (Cloudflare 524 after ~100s): a 200 saying a run
+          # is already in progress confirms that. Poll for a real result.
+          for attempt in 1 2 3 4 5; do
+            response=$(call || true)
+            status=$(printf '%s' "$response" | tail -n 1)
+            body=$(printf '%s' "$response" | sed '$d')
+            echo "$body"
+            if [ "$status" = "200" ]; then
+              if printf '%s' "$body" | grep -q '"skipped":true'; then
+                echo "A sweep is already running on the server; waiting for it."
+              else
+                exit 0
+              fi
+            else
+              echo "HTTP $status; the sweep may still be running server-side."
+            fi
+            if [ "$attempt" = "5" ]; then
+              echo "::warning::No completed sweep result after polling; the run continues server-side. Check the server logs if this persists."
+              exit 0
+            fi
+            sleep 45
+          done

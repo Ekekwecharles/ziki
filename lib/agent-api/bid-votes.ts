@@ -5,6 +5,7 @@ import { hasLevel, requireLevel } from "@/lib/agents/levels";
 import { audit } from "@/lib/agents/audit";
 import { IssueApiError } from "@/lib/agent-api/errors";
 import { publish } from "@/lib/agent-api/events";
+import { AWARDABLE_SUBSTATUSES } from "@/lib/issue-substatus";
 import { afterAward, awardInTransaction, bidTally, type AwardResult } from "@/lib/agent-api/bid";
 import { workflowFor } from "@/lib/workflow";
 import { isThresholdOnly, thresholdDecision } from "@/lib/governance";
@@ -73,7 +74,7 @@ export async function voteForBid(agent: AgentContext, projectId: string, bidId: 
     });
     if (!bid) throw new IssueApiError(404, "Bid not found.");
     if (bid.withdrawnAt || bid.awardedAt) throw new IssueApiError(409, "This bid is no longer open.");
-    if (bid.bug.substatus !== "open") throw new IssueApiError(409, "Only bids on open issues take votes.");
+    if (!AWARDABLE_SUBSTATUSES.includes(bid.bug.substatus)) throw new IssueApiError(409, "Only bids on open (or Live · Broken) issues take votes.");
     const ownBid = agent.ownerId === bid.beneficiaryUserId || agent.ownerId === bid.agent.ownerUserId;
     if (ownBid && !hasLevel(agent.level, "manager")) {
       const message = "This is your owner's own bid; other agents vote for it.";

@@ -15,7 +15,7 @@ import { MAX_RESULTS_PER_PART, SecurityJobError } from "./engine";
  * These routes are not workspace-scoped: a security-cleared agent checks parts
  * of any client's check, so a part is served by who holds it
  * (`SecurityCheckItem.agentId`), never by the key's workspace. Only agents with
- * site-wide security clearance (`Agent.securityClearedAt`) may call them.
+ * site-wide security clearance (its owner's `User.securityClearedAt`) may call them.
  *
  * Request bodies hold private results, so nothing here logs or audits them.
  */
@@ -34,11 +34,11 @@ export async function securityJobRequest(
   const budget = await consumeAgentBudget({ id: agent.agentId, burst: agent.burst, burstUntil: agent.burstUntil ?? null }, kind);
   if (!budget.allowed) return agentBudgetExceededResponse(budget.retryAfterSeconds, budget);
 
-  const row = await prisma.agent.findUnique({ where: { id: agent.agentId }, select: { securityClearedAt: true } });
-  if (!row || !isSecurityCleared(row)) {
+  const row = await prisma.agent.findUnique({ where: { id: agent.agentId }, select: { owner: { select: { securityClearedAt: true } } } });
+  if (!row || !isSecurityCleared(row.owner)) {
     return withAgentBudgetHeaders(
       NextResponse.json(
-        { error: "not_security_cleared", message: "Only agents cleared for security checks do these jobs. A super admin grants clearance, usually with an on-call invite." },
+        { error: "not_security_cleared", message: "Only agents whose owner is cleared for security checks do these jobs. Staff grant clearance, usually with an on-call invite." },
         { status: 403 },
       ),
       budget,

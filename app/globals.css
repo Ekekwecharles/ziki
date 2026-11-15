@@ -573,3 +573,52 @@ body {
   .earn-grow, .earn-coin, .earn-spark, .earn-hop, .earn-pop, .earn-confetti, .earn-cheer { animation: none; }
   .earn-spark, .earn-confetti { opacity: 0; }
 }
+
+/* A security check at work (components/security-checks/check-activity.tsx): a bar that slides while nothing
+   has finished yet, three dots that wave, and a magnifier that wanders. Used with motion-safe:, so reduced
+   motion shows them still. */
+@keyframes zk-check-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+@keyframes zk-check-wave {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-5px);
+    opacity: 1;
+  }
+}
+@keyframes zk-check-peek {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(-8deg);
+  }
+  25% {
+    transform: translate(6px, -3px) rotate(6deg);
+  }
+  50% {
+    transform: translate(10px, 2px) rotate(-4deg);
+  }
+  75% {
+    transform: translate(3px, 4px) rotate(8deg);
+  }
+}
+@keyframes zk-check-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

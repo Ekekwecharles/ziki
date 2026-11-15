@@ -56,11 +56,10 @@ describe("FloatingAgentLauncher", () => {
     ).toBeInTheDocument();
     // The options are rolled in, so they are not reachable yet.
     expect(screen.queryByRole("link", { name: /speak to support/i })).toBeNull();
-    expect(screen.queryByRole("link", { name: /play a game/i })).toBeNull();
     expect(screen.queryByRole("link", { name: /view agents/i })).toBeNull();
   });
 
-  it("rolls out all three options when the bot is clicked", async () => {
+  it("rolls out both options, and no games link, when the bot is clicked", async () => {
     const user = userEvent.setup();
     render(<FloatingAgentLauncher />);
 
@@ -69,8 +68,9 @@ describe("FloatingAgentLauncher", () => {
     expect(
       screen.getByRole("link", { name: /speak to support/i }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /play a game/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /view agents/i })).toBeInTheDocument();
+    // The games link is gone: support and agents are all there is.
+    expect(screen.queryByRole("link", { name: /play a game/i })).toBeNull();
     expect(
       screen.getByRole("button", { name: /close agent launcher/i }),
     ).toHaveAttribute("aria-expanded", "true");
@@ -84,7 +84,6 @@ describe("FloatingAgentLauncher", () => {
     await user.click(screen.getByRole("button", { name: /close agent launcher/i }));
 
     expect(screen.queryByRole("link", { name: /speak to support/i })).toBeNull();
-    expect(screen.queryByRole("link", { name: /play a game/i })).toBeNull();
     expect(screen.queryByRole("link", { name: /view agents/i })).toBeNull();
     expect(
       screen.getByRole("button", { name: /open agent launcher/i }),
@@ -117,17 +116,6 @@ describe("FloatingAgentLauncher", () => {
     const support = screen.getByRole("link", { name: /speak to support/i });
     expect(support).toHaveAttribute("href", "/escalations");
     expect(support).not.toHaveAttribute("target");
-  });
-
-  it("points play a game at the start.ng games grid", async () => {
-    const user = userEvent.setup();
-    render(<FloatingAgentLauncher />);
-
-    await user.click(screen.getByRole("button", { name: /open agent launcher/i }));
-
-    const game = screen.getByRole("link", { name: /play a game/i });
-    expect(game).toHaveAttribute("href", "https://start.ng/games");
-    expect(game).toHaveAttribute("target", "_blank");
   });
 
   it("points view agents at the agents directory", async () => {
@@ -194,7 +182,7 @@ describe("FloatingAgentLauncher", () => {
     // The browser fires a click after a drag; it must not toggle the menu.
     fireEvent.click(button);
 
-    expect(screen.queryByRole("link", { name: /play a game/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /view agents/i })).toBeNull();
   });
 
   it("opens the menu on the first click after a drag", () => {
@@ -231,7 +219,7 @@ describe("FloatingAgentLauncher", () => {
     });
     fireEvent.click(button);
 
-    expect(screen.getByRole("link", { name: /play a game/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /view agents/i })).toBeInTheDocument();
   });
 
   it("closes the options on Escape", async () => {
@@ -239,11 +227,11 @@ describe("FloatingAgentLauncher", () => {
     render(<FloatingAgentLauncher />);
 
     await user.click(screen.getByRole("button", { name: /open agent launcher/i }));
-    expect(screen.getByRole("link", { name: /play a game/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /view agents/i })).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
 
-    expect(screen.queryByRole("link", { name: /play a game/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /view agents/i })).toBeNull();
   });
 
   it("can open the in-app support guide instead of linking out", async () => {

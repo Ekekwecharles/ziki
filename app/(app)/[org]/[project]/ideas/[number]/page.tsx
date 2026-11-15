@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { requireProject } from "@/lib/project-route";
-import { ideasPath, marketingPath } from "@/lib/project-paths";
+import { ideasPath, marketingPath, projectPath } from "@/lib/project-paths";
 import { issueHref, parseIssueRef } from "@/lib/issue-ref";
 import { IDEA_SUMMARY_MAX_CHARS, listIdeaVerdicts } from "@/lib/agent-api/idea-verdicts";
 import { IdeaVerdictsPanel, type IdeaVerdictBlock } from "@/components/idea-verdicts";
@@ -27,6 +27,7 @@ import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { RejectIdeaButton } from "@/components/reject-idea-button";
 import { approveIdeaAction, rejectIdeaAction, withdrawIdeaAction } from "@/app/actions/idea-verdicts";
 import { awardingAgentOf } from "@/lib/bid-award-permission";
+import { OwnerIdeaControls } from "@/components/owner-idea-controls";
 
 export const metadata: Metadata = { title: "Idea" };
 
@@ -142,7 +143,9 @@ export default async function IdeaPage({ params, searchParams }: {
     rejectReason: idea.rejectReason,
   });
   // What this person can do from the Actions box, through their highest-level agent.
-  const actingAgent = idea.status === "open" && (rejectable || verdicts.convertible) ? await awardingAgentOf(user.id, organisationId) : null;
+  // #owner-control: the organisation's owner decides an open idea themselves, whatever its votes, without an agent.
+  const ideaOwner = idea.status === "open" && (await organisationAccessFor(user.id, organisationId, user.role)).admin;
+  const actingAgent = !ideaOwner && idea.status === "open" && (rejectable || verdicts.convertible) ? await awardingAgentOf(user.id, organisationId) : null;
   const canApprove = idea.status === "open" && verdicts.convertible && Boolean(actingAgent);
   const canReject = rejectable && (actingAgent?.level === "manager" || actingAgent?.level === "merger");
   const canWithdraw = own && idea.status === "open";
@@ -158,7 +161,7 @@ export default async function IdeaPage({ params, searchParams }: {
   const marketingIdea = idea.track === "marketing";
   const closedIdea = idea.status === "rejected" || idea.status === "archived";
   const backFallback = marketingIdea
-    ? marketingPath(slug, closedIdea ? "ideas/rejected" : "")
+    ? marketingPath(slug, closedIdea ? "ideas/rejected" : "tasks")
     : closedIdea ? ideasPath(slug, "rejected") : ideasPath(slug);
 
   return (
@@ -270,11 +273,34 @@ export default async function IdeaPage({ params, searchParams }: {
 
           {/* Actions (#idea-actions): approve once the score reached the threshold,
               reject a bad idea (a manager agent's), withdraw your own. */}
-          {canApprove || canReject || canWithdraw ? (
+          {ideaOwner || canApprove || canReject || canWithdraw ? (
             <section aria-label="Actions" data-testid="idea-actions" className="flex flex-col gap-2.5 rounded-[20px] border border-zk-border bg-zk-surface px-4 py-3.5">
               <h2 className="text-xs font-bold uppercase tracking-[0.08em] text-zk-muted">Actions</h2>
               {actionError ? <p role="alert" className="m-0 text-xs text-zk-bad-fg">{actionError}</p> : null}
-              <div className="flex flex-wrap gap-2">
+              {ideaOwner ? (
+                <OwnerIdeaControls
+                  ideaId={idea.id}
+                  ideaNumber={idea.number}
+                  issuePathFor={projectPath(slug, "")}
+                  score={verdicts.ideaScore}
+                  threshold={verdicts.ideaThreshold}
+                  more={canWithdraw ? (
+                  <form action={withdrawIdeaAction} data-testid="idea-withdraw">
+                    <input type="hidden" name="ideaId" value={idea.id} />
+                    <ConfirmSubmitButton
+                      confirm={{
+                        title: `Withdraw idea #${idea.number}?`,
+                        body: "It is archived as withdrawn by its owner, moves to Rejected ideas and takes no more verdicts. $ already given for verdicts on it stay.",
+                        confirmLabel: "Withdraw idea",
+                      }}
+                    >
+                      Withdraw idea
+                    </ConfirmSubmitButton>
+                  </form>
+                  ) : null}
+                />
+              ) : null}
+              <div className="flex flex-wrap gap-2 empty:hidden">
                 {canApprove ? (
                   <form action={approveIdeaAction}>
                     <input type="hidden" name="ideaId" value={idea.id} />
@@ -293,7 +319,7 @@ export default async function IdeaPage({ params, searchParams }: {
                 {canReject ? (
                   <RejectIdeaButton ideaId={idea.id} ideaNumber={idea.number} />
                 ) : null}
-                {canWithdraw ? (
+                {canWithdraw && !ideaOwner ? (
                   <form action={withdrawIdeaAction} data-testid="idea-withdraw">
                     <input type="hidden" name="ideaId" value={idea.id} />
                     <ConfirmSubmitButton

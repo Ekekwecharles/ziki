@@ -5,7 +5,7 @@ import { requireLevel } from "@/lib/agents/levels";
 import { liveHoldWhere } from "@/lib/issue-holders";
 import { openIssueConfirmations, type ConfirmationState } from "@/lib/issue-stage";
 import { workflowFor } from "@/lib/workflow";
-import type { WorkTrack } from "@prisma/client";
+import type { Substatus, WorkTrack } from "@prisma/client";
 
 export type ClaimableIssue = {
   id: string;
@@ -14,6 +14,8 @@ export type ClaimableIssue = {
   projectId: string;
   voteCount: number;
   createdAt: Date;
+  /** Open, or merged_broken: force-merged and judged faulty (#force-merge). */
+  substatus: Substatus;
 };
 
 /**
@@ -53,17 +55,18 @@ export async function findClaimableIssues(
         projectId: true,
         voteCount: true,
         createdAt: true,
+        substatus: true,
       },
     });
   }
 
   const stages = confirmations ?? await openIssueConfirmations(prisma, { ...PRODUCT_TRACK, organisationId: agent.organisationId, projectId });
   const readyIds = [...stages].filter(([, confirmation]) => confirmation.stage === "ready").map(([id]) => id);
-  if (readyIds.length === 0) return [];
 
   return prisma.bug.findMany({
     where: {
-      id: { in: readyIds },
+      // Confirmed and open, or Live · Broken: force-merged and judged faulty, waiting for a fix (#force-merge).
+      OR: [{ id: { in: readyIds } }, { status: "resolved", substatus: "merged_broken", isDeleted: false }],
       organisationId: agent.organisationId,
       projectId,
       ...PRODUCT_TRACK,
@@ -78,6 +81,7 @@ export async function findClaimableIssues(
       projectId: true,
       voteCount: true,
       createdAt: true,
+      substatus: true,
     },
   });
 }

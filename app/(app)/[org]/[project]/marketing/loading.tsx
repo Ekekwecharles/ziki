@@ -1,16 +1,13 @@
-import "@/app/(app)/[org]/[project]/issues/_list/issues.css";
-
 const block = "rounded-lg bg-zk-chip motion-safe:animate-pulse";
 
-export default function LoadingMarketingTasks() {
+export default function LoadingMarketingHome() {
   return (
     <>
-      <p role="status" className="sr-only">Loading tasks…</p>
-      <div aria-hidden="true" className="mx-auto mb-4 flex w-full max-w-6xl justify-center">
-        <div className={`${block} h-8 w-full max-w-[400px]`} />
-      </div>
-      <div aria-hidden="true" className="issues-page mx-auto w-full max-w-6xl space-y-2" style={{ paddingTop: 20 }}>
-        {Array.from({ length: 6 }, (_, index) => <div key={index} className={`${block} h-[60px] w-full`} />)}
+      <p role="status" className="sr-only">Loading Marketing…</p>
+      <div aria-hidden="true" className="mx-auto flex w-full max-w-3xl flex-col items-center gap-4 pt-10 sm:pt-16">
+        <div className={`${block} h-8 w-full max-w-md`} />
+        <div className={`${block} h-5 w-48`} />
+        <div className={`${block} mt-2 h-32 w-full rounded-2xl`} />
       </div>
     </>
   );

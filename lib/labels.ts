@@ -26,6 +26,8 @@ export const substatusLabel: Record<Substatus, string> = {
   on_staging: "On staging",
   on_prod: "On prod",
   published: "Published",
+  force_merged: "Force-merged",
+  merged_broken: "Broken",
   closed: "Closed",
 };
 
@@ -65,6 +67,8 @@ export const substatusClass: Record<Substatus, string> = {
   on_staging: statusClass.resolved,
   on_prod: statusClass.resolved,
   published: statusClass.resolved,
+  force_merged: "bg-amber-100 text-amber-950",
+  merged_broken: "bg-rose-100 text-rose-950",
   closed: statusClass.closed,
 };
 

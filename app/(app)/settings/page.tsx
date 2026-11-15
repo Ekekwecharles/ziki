@@ -10,6 +10,7 @@ import Link from "next/link";
 import { requireUser } from "@/lib/auth-helpers";
 import { firstProjectRefFor } from "@/lib/project-route";
 import { orgPath } from "@/lib/project-paths";
+import { currentOrganisationAccess } from "@/lib/organisation-access";
 import { prisma } from "@/lib/prisma";
 import { NotificationSettings } from "@/components/notification-settings";
 import { WalletAddressForm } from "@/components/wallet-address-form";
@@ -149,7 +150,7 @@ export default async function SettingsPage(props: {
       <div className="settings-layout">
         {/* Yours, then your organisation's: one sidebar for all settings. */}
         <Suspense fallback={<nav aria-label="Settings sections" className="settings-navigation" />}>
-          <SettingsNav orgRef={projectSlug} orgName={orgName} />
+          <SettingsNav orgRef={projectSlug} orgName={orgName} owner={(await currentOrganisationAccess(user.id, user.role)).membershipRole === "owner"} />
         </Suspense>
 
         <div className="settings-content flex min-w-0 flex-col gap-5">

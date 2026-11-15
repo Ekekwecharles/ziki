@@ -24,6 +24,8 @@ type Db = PrismaClient | Prisma.TransactionClient;
 export const PLATFORM_CUTOFF_DATE = new Date("2026-10-21T00:00:00.000Z");
 
 export type HistoricalBug = {
+  /** Imported work skips reporting/confirmation rewards; its solver is still paid normally. */
+  outsideWork?: { id: string } | null;
   id: string;
   organisationId: string;
   status: Status;
@@ -84,7 +86,7 @@ export function backfillEntries(
       sourceKey: pointSourceKey("solver", bug.id, bug.assigneeId),
     });
   }
-  if (!bug.duplicateOfId && bug.idea?.source !== "public") {
+  if (!bug.outsideWork && !bug.duplicateOfId && bug.idea?.source !== "public") {
     const modern = isModernBug(bug, options?.cutoffDate);
     // Modern agent-platform issues require confirmation (#715)
     if (!modern || bug.isConfirmed) {
@@ -155,6 +157,7 @@ export async function backfillPoints(db: Db, options: BackfillOptions = {}): Pro
         duplicateOfId: true,
         isDeleted: true,
         createdByAgentId: true,
+        outsideWork: { select: { id: true } },
         createdAt: true,
         projectId: true,
         reward: true,

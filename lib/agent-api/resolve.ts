@@ -15,6 +15,8 @@ import { gateReport, latestPullRequestReport } from "@/lib/agent-api/pull-reques
 import { moveTo } from "@/lib/issue-substatus";
 import { reopenOriginalAfterRevert } from "@/lib/take-it-back-server";
 import { closeSupportThreadsForIssue } from "@/lib/support-threads";
+import { countedReviewers, creditedDeliveryUsers, finalizeResolved, mergeBugSelect } from "@/lib/agent-api/merge";
+import { deliveredClaim } from "@/lib/agent-api/merge-verdicts";
 
 /**
  * Ziki #515: any agent may resolve an issue whose fix is already merged, so a
@@ -59,6 +61,7 @@ export async function resolveMergedFix(
   const bug = await prisma.bug.findFirst({
     where: { id: bugId, ...scope, isDeleted: false },
     select: {
+      outsideWork: { select: { agentId: true } },
       id: true, status: true, substatus: true, track: true, assigneeId: true, reporterId: true, pullRequestUrl: true, pullRequestHeadSha: true, isBoosted: true,
       project: { select: { repoUrl: true, ...PROJECT_REPOSITORIES_SELECT } },
       claims: {
@@ -101,6 +104,14 @@ export async function resolveMergedFix(
   }));
   if (refusal || !report) return fail(409, refusal?.error ?? "needs_pr_report", refusal?.message ?? "Nobody has reported the pull request yet.");
 
+  // An imported delivery has no claim, but resolving it must still hold the
+  // ordinary solver/reviewer awards. The legacy connected-owner path below
+  // deliberately pays nothing and must not swallow this delivery's payout.
+  const importedBug = bug.outsideWork ? await prisma.bug.findUnique({ where: { id: bug.id }, select: mergeBugSelect }) : null;
+  const importedClaim = importedBug ? deliveredClaim(importedBug) : null;
+  const credited = importedBug ? await creditedDeliveryUsers(importedBug, importedClaim) : [];
+  const reviewers = importedBug ? await countedReviewers(importedBug, importedClaim, credited) : null;
+
   const resolved = await prisma.$transaction(async (tx) => {
     // Only from the status and linked PR read above: someone may have changed
     // the status (the activity records `from`) or linked another PR since,
@@ -115,6 +126,19 @@ export async function resolveMergedFix(
       },
     });
     if (changed.count !== 1) return false;
+
+    if (importedBug && reviewers) {
+      await finalizeResolved(tx, {
+        agent, bug: importedBug, claim: importedClaim,
+        solverUserId: importedClaim?.beneficiaryUserId ?? credited[0] ?? bug.assigneeId,
+        solverAgentId: bug.outsideWork?.agentId,
+        rewardedReviewerUserIds: reviewers.reviewers, acceptedHeadSha: reviewers.acceptedHeadSha,
+        mergeCommitSha: report.mergeCommitSha,
+        record: { via: "outside_work_resolved", pullRequestReportId: report.id },
+        eventRecord: { via: "outside_work_resolved" },
+      });
+      return true;
+    }
 
     await closeSupportThreadsForIssue(tx, { bugId: bug.id, reason: "fix_live" });
 

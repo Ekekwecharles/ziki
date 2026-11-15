@@ -20,7 +20,13 @@ import { unlockSecurityFindings } from "./security-checks";
 describe("unlockSecurityFindings (#security-checks, plan C1)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.access.mockResolvedValue({ organisationId: "org1", admin: true });
+  });
+
+  it("refuses anyone who is not an owner or admin", async () => {
     mocks.access.mockResolvedValue({ organisationId: "org1", admin: false });
+    await expect(unlockSecurityFindings("c1", "all")).resolves.toEqual({ error: expect.stringContaining("owners and admins") });
+    expect(mocks.unlockFindings).not.toHaveBeenCalled();
   });
 
   it("unlocks all or the chosen findings on the person's own check, then goes back to Your sites", async () => {

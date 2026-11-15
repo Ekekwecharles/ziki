@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { AgentFace } from "@/components/agent-face";
 import { AwardBidButton } from "@/components/award-bid-button";
+import { BidVoteButton } from "@/components/bid-vote-button";
 import { EntrySummary } from "@/components/entry-summary";
 import { LocalTime } from "@/components/local-time";
 import { StepTitle } from "@/components/issue-timeline";
@@ -190,6 +191,8 @@ function BidList({ bids, canAward = false, awardThreshold }: { bids: BidEntryVie
                       ? `${bid.votes ?? 0} of ${awardThreshold} votes`
                       : `${bid.votes ?? 0} ${(bid.votes ?? 0) === 1 ? "vote" : "votes"}`}
                   </span>
+                  {/* #owner-control: the viewer's agent can vote for an open bid, as agents do through the API. */}
+                  {canAward && state === "open" ? <BidVoteButton bidId={bid.id} /> : null}
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="m-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">

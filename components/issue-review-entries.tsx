@@ -6,6 +6,9 @@ import { EntryReplyForm, type ReplyTarget } from "@/components/entry-reply-form"
 import { EvidenceFilesList } from "@/components/evidence-files";
 import type { EvidenceFile } from "@/lib/agent-api/evidence-files";
 import { receiptSummary, type DeliveryReceipt } from "@/lib/delivery-receipt";
+import type { VerdictProof } from "@/lib/proof";
+import { attachmentKind, formatBytes } from "@/lib/attachments";
+import { BASE_PATH } from "@/lib/base-path";
 
 /** What a review-stage entry shows, whichever stage it is from. */
 type ReviewEntryView = {
@@ -26,15 +29,30 @@ type ReviewEntryView = {
   files?: EvidenceFile[] | null;
   filesHidden?: boolean;
   fileCount?: number;
+  /** Whether it counts, where the organisation has checks (#deeper-testing). */
+  proofNote?: { label: string; tone: "ok" | "warn" | "bad" | "neutral" } | null;
+  /** What it proved, square by square, with each file; null while hidden from this viewer. */
+  proofItems?: ProofItem[] | null;
 };
 
-export type TestVerdictView = ReviewEntryView & { goodToMerge: boolean };
+/** One proof entry as people read it: the check or square, its result, what it shows and its file. */
+export type ProofItem = {
+  label: string;
+  result: "pass" | "fail" | "na";
+  shows?: string;
+  test?: string;
+  reason?: string;
+  file: { id: string; filename: string; contentType: string; size: number } | null;
+};
+
+export type TestVerdictView = ReviewEntryView & { goodToMerge: boolean; proof?: VerdictProof | null };
 export type DeliveryView = ReviewEntryView & { screenshots: string[]; testResults: string | null; receipt?: DeliveryReceipt | null; beneficiaryUserId?: string };
 export type MergeReviewView = ReviewEntryView & { verdict: "accept" | "reject" };
 
 type Chip = { label: string; className: string };
 
 const positive = "bg-zk-ok-bg text-zk-ok-fg";
+const NOTE_TONE = { ok: "bg-zk-ok-bg text-zk-ok-fg", warn: "border border-dashed border-zk-warn-bd bg-zk-warn-bg text-zk-warn-fg", bad: "bg-zk-bad-bg text-zk-bad-fg", neutral: "bg-zk-chip text-zk-text2" };
 const negative = "bg-zk-bad-bg text-zk-bad-fg";
 
 /** "pull/42" (and the commit), linked to the pull request. */
@@ -88,6 +106,11 @@ function ReviewEntryList({
               {entry.current ? null : (
                 <span className="rounded-full bg-zk-chip px-2 py-0.5 text-[11px] font-bold text-zk-text2">Earlier code</span>
               )}
+              {entry.proofNote ? (
+                <a href="#test-card" className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${NOTE_TONE[entry.proofNote.tone]}`}>
+                  {entry.proofNote.label}
+                </a>
+              ) : null}
               <PullRequestRef url={entry.pullRequestUrl} headSha={entry.headSha} />
               <span className="whitespace-nowrap text-xs text-zk-muted">
                 · <LocalTime date={entry.updatedAt} />
@@ -98,6 +121,7 @@ function ReviewEntryList({
               {canReply ? <EntryReplyForm bugId={bugId} target={target(entry.id)} label={replyLabel} /> : null}
             </EntrySummary>
             {entry.reason ? <p className="mt-1 text-xs text-zk-muted"><b>Reason:</b> {entry.reason}</p> : null}
+            {entry.proofItems?.length ? <ProofList items={entry.proofItems} /> : null}
             <EvidenceFilesList
               files={entry.files}
               filesHidden={entry.filesHidden}
@@ -113,6 +137,42 @@ function ReviewEntryList({
   );
 }
 
+
+const RESULT = { pass: ["PASSED", "border-zk-ok-fg text-zk-ok-fg"], fail: ["FAILED", "border-zk-bad-fg text-zk-bad-fg"], na: ["N/A", "border-zk-border text-zk-muted"] } as const;
+
+/** A judgement's proof (#deeper-testing): each check or square it stamped, what the file shows, and the file. */
+function ProofList({ items }: { items: ProofItem[] }) {
+  return (
+    <details className="mt-1.5 text-[13px]" open>
+      <summary className="cursor-pointer text-xs font-bold text-zk-accent">Proof · {items.length}</summary>
+      <ul className="m-0 mt-1.5 flex list-none flex-col gap-2 p-0">
+        {items.map((item) => (
+          <li key={item.label} className="flex items-start gap-2.5">
+            {item.file && attachmentKind(item.file.contentType) === "image" ? (
+              <a href={`${BASE_PATH}/api/attachments/${item.file.id}`} target="_blank" rel="noopener" className="shrink-0 overflow-hidden rounded-md border border-zk-border">
+                {/* eslint-disable-next-line @next/next/no-img-element -- served by our own auth-checked route */}
+                <img src={`${BASE_PATH}/api/attachments/${item.file.id}`} alt={item.shows ?? item.file.filename} loading="lazy" className="h-20 w-28 bg-zk-chip object-contain" />
+              </a>
+            ) : null}
+            <span className="min-w-0">
+              <span className="flex flex-wrap items-center gap-1.5">
+                <span className={`rounded border px-1 font-mono text-[10px] font-black ${RESULT[item.result][1]}`}>{RESULT[item.result][0]}</span>
+                <b className="font-semibold text-zk-text">{item.label}</b>
+              </span>
+              <span className="block text-xs text-zk-text2">
+                {item.result === "na" ? item.reason : item.shows}
+                {item.test ? <> · test <code>{item.test}</code></> : null}
+                {item.file && attachmentKind(item.file.contentType) !== "image" ? (
+                  <> · <a href={`${BASE_PATH}/api/attachments/${item.file.id}`} target="_blank" rel="noopener" className="text-zk-accent underline">{item.file.filename}</a> ({formatBytes(item.file.size)})</>
+                ) : null}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
 
 /** A delivery's evidence: its screenshot links and test results, behind a toggle. */
 function DeliveryEvidence({ screenshots, testResults }: { screenshots: string[]; testResults: string | null }) {

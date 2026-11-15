@@ -397,7 +397,7 @@ export async function convertVettedIdea(tx: Tx, agent: AgentContext, projectId: 
   return { ...converted, ...held };
 }
 
-/** A client selected this finding from a paid report. Convert it as vetted
+/** A client selected this finding from a posted security report. Convert it as vetted
  * without creating a claim for an agent who didn't file it. */
 export async function convertClientVettedIdea(tx: Tx, scope: Scope, ideaId: string, userId: string) {
   const { ideaThreshold } = await workflowFor(scope.projectId, tx);
@@ -407,7 +407,7 @@ export async function convertClientVettedIdea(tx: Tx, scope: Scope, ideaId: stri
     via: "already_vetted",
     decidedByUserId: userId,
     decidedByAgentId: null,
-    vettedNote: "Selected by the client from a paid security check.",
+    vettedNote: "Selected by the client from a posted security report.",
   });
 }
 
@@ -803,4 +803,48 @@ export async function withdrawIdea(withdrawer: IdeaWithdrawer, projectId: string
     });
   }
   return withdrawn;
+}
+
+/**
+ * The organisation owner decides an idea themselves (#owner-control): accept
+ * it as an issue whatever its score, reject it whatever its votes, or archive
+ * it, without an agent. The caller has checked they are an owner or admin of
+ * the idea's organisation. The records name no agent; `userId` is the owner.
+ */
+export async function ownerConvertIdea(scope: Scope, userId: string, ideaId: string, difficulty: Difficulty = "medium") {
+  const { ideaThreshold } = await workflowFor(scope.projectId);
+  return prisma.$transaction(async (tx) => {
+    const locked = await lockedIdea(tx, scope, ideaId);
+    assertOpenIdea(locked);
+    return convertLocked(tx, scope, locked, { userId, agentId: null }, ideaThreshold, undefined, difficulty);
+  });
+}
+
+export async function ownerRejectIdea(scope: Scope, userId: string, ideaId: string, reason: string) {
+  return prisma.$transaction(async (tx) => {
+    const locked = await lockedIdea(tx, scope, ideaId);
+    assertOpenIdea(locked);
+    const votes = ideaVotes(await tx.ideaVerdict.findMany({ where: { ideaId: locked.id }, select: { opinion: true, votes: true } }));
+    return rejectLocked(tx, scope, locked, { userId, agentId: null }, votes, undefined, reason.trim() || null);
+  });
+}
+
+export async function ownerArchiveIdea(scope: Scope, ideaId: string, input: Pick<ArchiveIdeaInput, "reason" | "evidence">) {
+  if (input.reason === IDEA_WITHDRAWN_REASON) throw withdrawnNotArchivable();
+  return prisma.$transaction(async (tx) => {
+    const locked = await lockedIdea(tx, scope, ideaId);
+    assertOpenIdea(locked);
+    await tx.idea.update({
+      where: { id: locked.id },
+      data: { status: "archived", archiveReason: input.reason, archiveEvidence: input.evidence, archivedAt: new Date(), archivedByAgentId: null },
+    });
+    await publish(tx, {
+      organisationId: scope.organisationId,
+      type: "idea.archived",
+      actorAgentId: null,
+      projectId: scope.projectId,
+      payload: { ideaId: locked.id, ideaNumber: locked.number, projectId: scope.projectId, reason: input.reason, duplicateOf: null, ideaScore: locked.score },
+    });
+    return { ideaId: locked.id, ideaNumber: locked.number };
+  });
 }

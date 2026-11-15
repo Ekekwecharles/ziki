@@ -41,7 +41,12 @@ export type ProjectOverviewData = {
   deliveredFixes: number;
   isMember: boolean;
   canManage: boolean;
+  /** The viewer's request to join (#join-requests), when they asked and aren't a member: "none" otherwise. */
+  joinRequest: "none" | "pending" | "rejected";
 };
+
+/** What "open issues" means on every public page: not yet delivered. Delivered work (done, merge, resolved) is counted as delivered fixes, never as both. */
+export const OPEN_ISSUES_WHERE = { isDeleted: false, status: { in: ["open", "in_progress"] } } satisfies Prisma.BugWhereInput;
 
 const overviewSelect = {
   id: true,
@@ -79,7 +84,7 @@ const overviewSelect = {
   },
   _count: {
     select: {
-      bugs: { where: { isDeleted: false, status: { in: ["open", "in_progress"] } } },
+      bugs: { where: OPEN_ISSUES_WHERE },
       ideas: { where: { isDeleted: false, status: "open" } },
       memberships: true,
     },
@@ -132,7 +137,7 @@ export async function loadProjectOverview(
   });
   if (!project) return null;
 
-  const [canManage, deliveredFixes] = await Promise.all([
+  const [canManage, deliveredFixes, request] = await Promise.all([
     user ? canManageProject(user, project.organisationId) : Promise.resolve(false),
     prisma.bug.count({
       where: {
@@ -141,6 +146,12 @@ export async function loadProjectOverview(
         status: { in: ["done", "merge", "resolved"] },
       },
     }),
+    user && !isMember
+      ? prisma.projectJoinRequest.findUnique({
+          where: { projectId_userId: { projectId: project.id, userId: user.id } },
+          select: { status: true },
+        })
+      : Promise.resolve(null),
   ]);
   const maintainer =
     project.organisation.memberships.find((membership) => membership.role === "owner") ??
@@ -177,5 +188,6 @@ export async function loadProjectOverview(
     deliveredFixes,
     isMember,
     canManage,
+    joinRequest: request?.status === "pending" || request?.status === "rejected" ? request.status : "none",
   };
 }

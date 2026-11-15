@@ -3,10 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth-helpers";
-import { canManageProject } from "@/lib/project-permissions";
+import { canContributeToProject, canManageProject } from "@/lib/project-permissions";
 import { marketingPath, orgPath, projectPath, projectRef } from "@/lib/project-paths";
 import { projectHomePath } from "@/lib/marketing/project-home";
 import { awardSignupBonus } from "@/lib/points/signup-bonus";
+import { DECLINED_REQUEST_COOLDOWN_MS } from "@/lib/join-requests";
 
 export type JoinRequestActionResult = {
   ok?: boolean;
@@ -45,15 +46,17 @@ export async function acceptJoinRequestAction(formData: FormData): Promise<void>
   }
 
   await prisma.$transaction(async (tx) => {
-    // 1. Update request status
-    await tx.projectJoinRequest.update({
-      where: { id: requestId },
+    // 1. Move it out of pending, only once: a second admin (or a double click) deciding the same request
+    // changes nothing, so the applicant is never added twice or told two different answers.
+    const decided = await tx.projectJoinRequest.updateMany({
+      where: { id: requestId, status: "pending" },
       data: {
         status: "accepted",
         reviewedBy: user.id,
         reviewedAt: new Date(),
       },
     });
+    if (decided.count === 0) return;
 
     // 2. Add ProjectMembership
     await tx.projectMembership.upsert({
@@ -114,14 +117,16 @@ export async function rejectJoinRequestAction(formData: FormData): Promise<void>
   }
 
   await prisma.$transaction(async (tx) => {
-    await tx.projectJoinRequest.update({
-      where: { id: requestId },
+    // Only a request still pending can be declined, and only once (see accept).
+    const decided = await tx.projectJoinRequest.updateMany({
+      where: { id: requestId, status: "pending" },
       data: {
         status: "rejected",
         reviewedBy: user.id,
         reviewedAt: new Date(),
       },
     });
+    if (decided.count === 0) return;
 
     await tx.notification.create({
       data: {
@@ -220,4 +225,93 @@ export async function joinOpenProjectAction(projectId: string): Promise<JoinOpen
   revalidatePath(orgPath(pRef, "members"));
   const href = marketingTasks > 0 ? marketingPath(pRef) : await projectHomePath(prisma, project.id, pRef);
   return { ok: true, href };
+}
+
+export type RequestToJoinResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * Ask to join a public project that is not open for contributors (#join-requests). An open project needs no
+ * request (joinOpenProjectAction lets you straight in), and a private project can't be asked at all: it answers
+ * exactly like a project that doesn't exist, so a request never confirms a private project is there.
+ *
+ * One request per person per project (the table's unique key). A pending request can't be sent again; a
+ * declined one can be sent again after DECLINED_REQUEST_COOLDOWN_MS; an accepted one whose membership was
+ * later removed can be sent again straight away. The organisation's owners and admins are notified and
+ * decide it from Organisation → Invites.
+ */
+export async function requestToJoinProjectAction(projectId: string, rawMessage: string): Promise<RequestToJoinResult> {
+  const user = await requireUser();
+  if (typeof projectId !== "string" || !projectId.trim()) return { ok: false, error: "Project not found." };
+  const message = typeof rawMessage === "string" ? rawMessage.trim().slice(0, 1000) : "";
+
+  const project = await prisma.project.findFirst({
+    where: { id: projectId, archivedAt: null, visibility: "public", organisation: { archivedAt: null } },
+    select: {
+      id: true,
+      slug: true,
+      name: true,
+      organisationId: true,
+      isOpenForContributors: true,
+      organisation: { select: { slug: true } },
+    },
+  });
+  if (!project) return { ok: false, error: "Project not found." };
+  if (project.isOpenForContributors) {
+    return { ok: false, error: "This project is open to everyone: use Join instead." };
+  }
+  if (await canContributeToProject(user, project.id, project.organisationId)) {
+    return { ok: false, error: "You're already a member of this project." };
+  }
+
+  const existing = await prisma.projectJoinRequest.findUnique({
+    where: { projectId_userId: { projectId: project.id, userId: user.id } },
+    select: { status: true, reviewedAt: true, updatedAt: true },
+  });
+  if (existing?.status === "pending") {
+    return { ok: false, error: "You've already asked to join this project. The maintainers will get back to you." };
+  }
+  if (existing?.status === "rejected") {
+    const declinedAt = (existing.reviewedAt ?? existing.updatedAt).getTime();
+    if (Date.now() - declinedAt < DECLINED_REQUEST_COOLDOWN_MS) {
+      return { ok: false, error: "Your last request was declined. You can ask again tomorrow." };
+    }
+  }
+
+  try {
+    await prisma.projectJoinRequest.upsert({
+      where: { projectId_userId: { projectId: project.id, userId: user.id } },
+      create: { projectId: project.id, userId: user.id, message: message || null, status: "pending" },
+      update: { message: message || null, status: "pending", reviewedBy: null, reviewedAt: null },
+    });
+  } catch (error) {
+    // Two sends at once: the other one made the row, so this one is the duplicate.
+    if ((error as { code?: string })?.code === "P2002") {
+      return { ok: false, error: "You've already asked to join this project. The maintainers will get back to you." };
+    }
+    throw error;
+  }
+
+  const pRef = projectRef(project.organisation.slug, project.slug);
+  const managers = await prisma.membership.findMany({
+    where: { organisationId: project.organisationId, role: { in: ["owner", "admin"] } },
+    select: { userId: true },
+  });
+  if (managers.length > 0) {
+    await prisma.notification
+      .createMany({
+        data: managers.map((manager) => ({
+          userId: manager.userId,
+          organisationId: project.organisationId,
+          kind: "join_request",
+          title: `${user.name || "Someone"} asked to join ${project.name}`,
+          url: orgPath(pRef, "invites"),
+        })),
+      })
+      .catch((error) => console.error("[join-requests] notifying maintainers failed", error));
+  }
+
+  revalidatePath("/discover");
+  revalidatePath(projectPath(pRef));
+  revalidatePath(orgPath(pRef, "invites"));
+  return { ok: true };
 }

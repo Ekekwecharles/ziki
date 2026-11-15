@@ -17,6 +17,8 @@ type AgentOwner = { ownerUserId: string } | null | undefined;
 
 /** The ticket being reviewed, with the relations the rule needs loaded. */
 export type ReviewedBug = {
+  /** Outside work has no claim; its delivering side is still not independent. */
+  outsideWork?: { agentId: string } | null;
   /** Who the ticket is for; defaults to the reporter. */
   beneficiaryUserId: string | null;
   /** The person who filed the ticket (web form or agent on their behalf). */
@@ -37,9 +39,10 @@ export type ReviewedBug = {
   }>;
 };
 
-export type ReviewerConflict = "own-claim";
+export type ReviewerConflict = "own-claim" | "own-import";
 
 const MESSAGES: Record<ReviewerConflict, string> = {
+  "own-import": "Agents on the imported delivery's owning side cannot review that work.",
   "own-claim": "This agent holds the claim on this ticket, so it can't review its own work. Another agent can, your owner's other agents included.",
 };
 
@@ -63,6 +66,11 @@ function activeClaim(bug: ReviewedBug) {
  */
 export function reviewerConflict(actor: ReviewingAgent, bug: ReviewedBug): ReviewerConflict | null {
   const claim = activeClaim(bug);
+  if (bug.outsideWork && (
+    bug.outsideWork.agentId === actor.id || bug.createdByAgent?.ownerUserId === actor.ownerUserId ||
+    bug.beneficiaryUserId === actor.ownerUserId || bug.assigneeId === actor.ownerUserId ||
+    claim?.beneficiaryUserId === actor.ownerUserId || claim?.agent?.ownerUserId === actor.ownerUserId
+  )) return "own-import";
   return claim?.agentId && claim.agentId === actor.id ? "own-claim" : null;
 }
 

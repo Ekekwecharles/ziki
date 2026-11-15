@@ -16,6 +16,7 @@ import {
   postReportIfComplete,
   reclaimStaleJobs,
   startCheck,
+  startWaitingChecks,
   submitReport,
 } from "@/lib/security-checks/engine";
 
@@ -80,13 +81,13 @@ describe("who gets a part (#security-checks)", () => {
     db.agent.findMany.mockResolvedValue([]);
     expect(await assignWaitingJobs(asDb(db), now)).toBe(0);
     const where = db.agent.findMany.mock.calls[0][0].where;
-    expect(where).toMatchObject({ securityClearedAt: { not: null }, revokedAt: null, pausedAt: null });
+    expect(where).toMatchObject({ owner: { securityClearedAt: { not: null } }, revokedAt: null, pausedAt: null });
     expect(where.apiKeys.some.lastUsedAt.gte).toEqual(new Date(now.getTime() - 15 * 60 * 1000));
   });
 
   it("gives a waiting part only while it is still free", async () => {
     const db = fakeDb();
-    db.agent.findMany.mockResolvedValue([{ id: "agentA", onCallAt: now, activations: [], _count: { securityCheckItems: 0 } }]);
+    db.agent.findMany.mockResolvedValue([{ id: "agentA", owner: { onCallAt: now }, activations: [], _count: { securityCheckItems: 0 } }]);
     db.securityCheckItem.findMany.mockResolvedValue([
       { id: "j1", check: { organisationId: "client" } },
       { id: "j2", check: { organisationId: "client" } },
@@ -97,6 +98,36 @@ describe("who gets a part (#security-checks)", () => {
       where: { id: "j1", status: "waiting", agentId: null },
       data: { status: "checking", agentId: "agentA", assignedAt: now },
     });
+  });
+
+  it("gives agents only parts younger than the fallback time, so a failing agent can't keep old parts from Ziki's own agent", async () => {
+    vi.stubEnv("ZIKI_CLAUDE_API_KEY", "key");
+    vi.stubEnv("SECURITY_FALLBACK_AFTER_MINUTES", "5");
+    try {
+      const db = fakeDb();
+      db.agent.findMany.mockResolvedValue([{ id: "agentA", owner: { onCallAt: now }, activations: [], _count: { securityCheckItems: 0 } }]);
+      db.securityCheckItem.findMany.mockResolvedValue([]);
+      await assignWaitingJobs(asDb(db), now);
+      const where = db.securityCheckItem.findMany.mock.calls[0][0].where;
+      expect(where.createdAt).toEqual({ gte: new Date(now.getTime() - 5 * 60_000) });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("gives agents any waiting part when the fallback can't run (no AI key, or turned off)", async () => {
+    for (const env of [{ ZIKI_CLAUDE_API_KEY: "", SECURITY_FALLBACK_AFTER_MINUTES: "5" }, { ZIKI_CLAUDE_API_KEY: "key", SECURITY_FALLBACK_AFTER_MINUTES: "0" }]) {
+      for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
+      try {
+        const db = fakeDb();
+        db.agent.findMany.mockResolvedValue([{ id: "agentA", owner: { onCallAt: now }, activations: [], _count: { securityCheckItems: 0 } }]);
+        db.securityCheckItem.findMany.mockResolvedValue([]);
+        await assignWaitingJobs(asDb(db), now);
+        expect(db.securityCheckItem.findMany.mock.calls[0][0].where).not.toHaveProperty("createdAt");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    }
   });
 });
 
@@ -109,9 +140,25 @@ describe("starting a check: Ziki's AI splits it", () => {
     const parts = Array.from({ length: 8 }, (_, i) => ({ title: `Part ${i + 1}`, instructions: "Look at it." }));
     const { ai } = fakeAi({ parts });
     expect(await startCheck(asDb(db), "check1", now, { ai, readPage: null })).toBe(true);
-    expect(db.securityCheck.updateMany.mock.calls[0][0].where).toMatchObject({ id: "check1", target: { verifiedAt: { not: null } } });
+    // Proof is off, so the start asks nothing of the target (with it on, it also asks for verifiedAt).
+    expect(db.securityCheck.updateMany.mock.calls[0][0].where).toMatchObject({ id: "check1" });
+    expect(db.securityCheck.updateMany.mock.calls[0][0].where).not.toHaveProperty("target");
     expect(db.securityCheckItem.createMany.mock.calls[0][0].data).toHaveLength(8);
     expect(db.securityCheckItem.createMany.mock.calls[0][0].data[0]).toMatchObject({ checkId: "check1", kind: "check", title: "Part 1" });
+  });
+
+  it("starts a check still marked as waiting for proof while proof is off, and not when it is required", async () => {
+    for (const [required, statuses] of [[false, ["queued", "awaiting_ownership"]], [true, ["queued"]]] as const) {
+      vi.stubEnv("SECURITY_OWNERSHIP_PROOF_REQUIRED", required ? "true" : "false");
+      const db = fakeDb();
+      db.securityCheck.updateMany.mockResolvedValue({ count: 0 });
+      await startCheck(asDb(db), "check1", now, { ai: fakeAi({ parts: [] }).ai, readPage: null });
+      expect(db.securityCheck.updateMany.mock.calls[0][0].where.OR[0]).toEqual({ status: { in: statuses } });
+      db.securityCheck.findMany.mockResolvedValue([]);
+      await startWaitingChecks(asDb(db), now);
+      expect(db.securityCheck.findMany.mock.calls[0][0].where.OR[0]).toEqual({ status: { in: statuses } });
+      vi.unstubAllEnvs();
+    }
   });
 
   it("does nothing when another run already claimed it, or it isn't proven", async () => {
@@ -150,10 +197,19 @@ describe("reporting a part", () => {
     expect(db.securityCheckResult.createMany).not.toHaveBeenCalled();
   });
 
-  it("refuses work on a check whose target lost its ownership proof", async () => {
+  it("refuses work on a check whose target lost its ownership proof, when proof is required", async () => {
+    vi.stubEnv("SECURITY_OWNERSHIP_PROOF_REQUIRED", "true");
     const db = fakeDb();
     db.securityCheckItem.findUnique.mockResolvedValue(heldItem({ check: { status: "checking", target: { verifiedAt: null } } }));
     await expect(submitReport(asDb(db), "agentA", "item1", [], now)).rejects.toBeInstanceOf(SecurityJobError);
+    vi.unstubAllEnvs();
+  });
+
+  it("takes the work of a target with no proof while proof is off", async () => {
+    const db = fakeDb();
+    db.securityCheckItem.findUnique.mockResolvedValue(heldItem({ check: { status: "checking", target: { verifiedAt: null } } }));
+    db.securityCheckItem.updateMany.mockResolvedValue({ count: 1 });
+    expect(await submitReport(asDb(db), "agentA", "item1", found, now)).toEqual({ checkId: "check1", results: 1 });
   });
 
   it("serves no old split or collate jobs", async () => {
@@ -222,6 +278,8 @@ describe("paying the finder of an unlocked finding (#security-checks)", () => {
     db.securityCheckResult.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
     expect(await payUnlockedFindings(asDb(db), now)).toBe(2);
     expect(db.securityCheckResult.findMany.mock.calls[0][0].where).toMatchObject({ unlockedAt: { not: null }, payoutReleasedAt: null });
+    // Ziki's own security agent (the fallback) is never paid.
+    expect(db.securityCheckResult.findMany.mock.calls[0][0].where.item).toEqual({ agentId: { not: null }, agent: { username: { not: "ziki-security" } } });
     expect(award.mock.calls[0][1]).toEqual({
       organisationId: "client",
       userId: "ownerB",

@@ -133,6 +133,8 @@ const REVERT_LABELS: Record<string, string> = {
   on_dev: "merged on dev",
   on_staging: "merged on staging",
   on_prod: "merged on prod",
+  force_merged: "force-merged",
+  merged_broken: "force-merged and judged broken",
   closed: "closed",
 };
 

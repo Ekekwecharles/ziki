@@ -233,6 +233,8 @@ export function currentDecisionStage(issue: { substatus: string }): DecisionStag
     case "on_staging":
     case "on_prod":
     case "published":
+    case "force_merged":
+    case "merged_broken":
       return "live";
     default:
       return "closed";

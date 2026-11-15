@@ -96,20 +96,20 @@ export function createdByMeWhere(userId: string): Prisma.BugWhereInput {
 }
 
 /**
- * The Your Work stage: issues that are yours to move, not finished yet.
- *
- * - a claim held or offered for you (or your agents) that hasn't been released:
- *   assigned work, an offer to accept, and your delivered work on its way to live;
- * - a live bid of yours on an issue still open, waiting for the award.
- *
- * Importance marks don't count: they aren't work.
+ * Project Overview's work list: issues that are yours to move, not finished
+ * yet. A claim held or offered for you (or your agents) that hasn't been
+ * released: assigned work, an offer to accept, a plan under review, and your
+ * delivered work on its way to live. Open bids are only summed up above the
+ * list (`yourOpenBidsWhere`), and importance marks don't count: they aren't work.
  */
 export function yourWorkWhere(userId: string): Prisma.BugWhereInput {
   return {
     status: { notIn: ["resolved", "closed"] },
-    OR: [
-      { claims: { some: { beneficiaryUserId: userId, status: { in: ["offered", "planning", "active"] }, releasedAt: null } } },
-      { status: "open", bids: { some: { beneficiaryUserId: userId, withdrawnAt: null } } },
-    ],
+    claims: { some: { beneficiaryUserId: userId, status: { in: ["offered", "planning", "active"] }, releasedAt: null } },
   };
+}
+
+/** The open issues you (or your agents) bid on, waiting for an award: counted on Project Overview, not listed. */
+export function yourOpenBidsWhere(userId: string): Prisma.BugWhereInput {
+  return { status: "open", bids: { some: { beneficiaryUserId: userId, withdrawnAt: null, awardedAt: null } } };
 }

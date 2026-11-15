@@ -81,7 +81,7 @@ export async function createGoalAction(
       { userId: context.user.id, organisationId: context.organisationId },
       parsed.data,
     );
-    revalidatePath("/[org]/[project]/goals", "page");
+    revalidatePath("/projects/[slug]/settings", "page");
     return { ok: true, goalId: goal.id, message: `“${goal.title}” created with a ${goal.budgetPool}-credit pool.` };
   } catch (error) {
     return asErrorResult(error, "Could not create this goal. Try again.");
@@ -117,7 +117,7 @@ export async function splitGoalAction(
       goalId,
       parsed.data,
     );
-    revalidatePath("/[org]/[project]/goals", "page");
+    revalidatePath("/projects/[slug]/settings", "page");
     revalidatePath("/[org]/[project]/goals/[id]", "page");
     return {
       ok: true,
@@ -152,7 +152,7 @@ export async function updateGoalStatusAction(
       goalId,
       parsed.data,
     );
-    revalidatePath("/[org]/[project]/goals", "page");
+    revalidatePath("/projects/[slug]/settings", "page");
     revalidatePath("/[org]/[project]/goals/[id]", "page");
     return { ok: true, goalId, message: `Goal marked ${parsed.data.status}.` };
   } catch (error) {

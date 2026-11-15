@@ -13,6 +13,8 @@ import { readPullRequest } from "@/lib/github/pull-request-snapshot";
 import { parsePullRequestUrl } from "@/lib/github/pull-request-url";
 import { installationIdForPullRequest, PROJECT_REPOSITORIES_SELECT, repoForPullRequest } from "@/lib/github/project-repositories";
 import { asSnapshot, type PullRequestSnapshot } from "@/lib/github/snapshot-types";
+import { followIssuePreviewBuilds, startPreviewBuildIfDue } from "@/lib/previews/builds";
+import { sameCommit } from "@/lib/github/commit-sha";
 
 /**
  * Ziki reads an issue's pull request on GitHub and records it (#github-status).
@@ -193,7 +195,7 @@ export async function syncPullRequestStatus(
         });
     if (unchanged) return { reportId: report.id, moved: null, changed: false };
 
-    const headMoved = snapshot.state === "open" && snapshot.headSha !== null && snapshot.headSha !== bug.pullRequestHeadSha;
+    const headMoved = snapshot.state === "open" && snapshot.headSha !== null && !sameCommit(snapshot.headSha, bug.pullRequestHeadSha);
     if (headMoved) {
       await tx.bug.updateMany({ where: { id: bug.id, pullRequestUrl }, data: { pullRequestHeadSha: snapshot.headSha } });
     }
@@ -241,6 +243,9 @@ export async function syncPullRequestStatus(
     return { reportId: report.id, moved, changed: true };
   });
 
+  // #previews: build the new commit, and follow the builds already started.
+  await previewsAfterRead(bug, pullRequestUrl, snapshot);
+
   // Tell the person the fix is for, once, when it stops being mergeable.
   if (outcome.moved?.to === "error") {
     const claim = bug.claims[0];
@@ -258,6 +263,28 @@ export async function syncPullRequestStatus(
     moved: outcome.moved,
     cached: false,
   };
+}
+
+/** Previews never hold up or fail a GitHub read. */
+async function previewsAfterRead(
+  bug: { id: string; projectId: string; status: string; project: { repoUrl: string | null } },
+  pullRequestUrl: string,
+  snapshot: PullRequestSnapshot,
+): Promise<void> {
+  try {
+    await startPreviewBuildIfDue({
+      bugId: bug.id,
+      projectId: bug.projectId,
+      issueStatus: bug.status,
+      repoUrl: bug.project.repoUrl,
+      pullRequestUrl,
+      state: snapshot.state,
+      headSha: snapshot.headSha,
+    });
+    await followIssuePreviewBuilds(bug.id);
+  } catch (error) {
+    console.error("[previews] after GitHub read", error);
+  }
 }
 
 /**

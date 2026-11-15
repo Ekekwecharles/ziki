@@ -2,6 +2,7 @@ import { DEFAULT_MARKETING_TASK_TYPES } from "@/lib/marketing/default-task-types
 import { randomInt } from "node:crypto";
 import { cookies } from "next/headers";
 import { awardSignupBonus } from "@/lib/points/signup-bonus";
+import { addOnCallGuests } from "@/lib/on-call-guests";
 import { unstable_rethrow } from "next/navigation";
 import type { MembershipRole, Prisma, PrismaClient } from "@prisma/client";
 import { z } from "zod";
@@ -419,6 +420,8 @@ export async function createOrganisation(
         select: { id: true, slug: true, name: true },
       });
       await awardSignupBonus(db, creator.id, organisation.id);
+      // On-call guests (12 Nov plan, D2): a few free on-call agents join to give a quick win. Never fails the create.
+      await addOnCallGuests(db, { organisationId: organisation.id, creatorId: creator.id });
       return { ok: true, organisation: { id: organisation.id, slug: organisation.slug, name: organisation.name } };
     } catch (error) {
       // Only the slug is unique on a brand-new organisation: try another one.

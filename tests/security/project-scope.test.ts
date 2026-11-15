@@ -86,7 +86,7 @@ vi.mock("@/lib/organisation-access", async (importOriginal) => ({
     organisationId === "org-they-admin" ? { membershipRole: "admin", admin: true } : { membershipRole: null, admin: false }),
 }));
 
-import MarketingHomePage from "@/app/(app)/[org]/[project]/marketing/page";
+import MarketingHomePage from "@/app/(app)/[org]/[project]/marketing/tasks/page";
 import MarketingPage from "@/app/(app)/marketing/page";
 import LibraryPage from "@/app/(app)/[org]/[project]/marketing/output-box/page";
 import { readLibrary } from "@/app/(app)/[org]/[project]/marketing/output-box/data";

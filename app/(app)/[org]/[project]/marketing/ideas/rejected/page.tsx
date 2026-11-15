@@ -24,5 +24,5 @@ export default async function RejectedIdeasPage({ params, searchParams }: Props)
     console.error("[marketing ideas] Failed to read rejected ideas", error);
     result = { ok: false };
   }
-  return <RejectedIdeas slug={slug} projectName={context.project.name} initial={result} />;
+  return <RejectedIdeas slug={slug} initial={result} />;
 }

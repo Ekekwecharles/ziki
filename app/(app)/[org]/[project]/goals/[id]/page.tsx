@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { requireProject } from "@/lib/project-route";
-import { goalPath, goalsPath, ideasPath, type ProjectRef } from "@/lib/project-paths";
+import { goalPath, type ProjectRef } from "@/lib/project-paths";
 import { issuePath } from "@/lib/issue-ref";
 import { withBudget, type GoalAllocationRecord } from "@/lib/goals/service";
 import { activeIn } from "@/lib/agents/active-in";
@@ -151,19 +151,11 @@ export default async function GoalDetailPage({
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-5">
-      <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-sm text-zk-text2">
-        <Link href={ideasPath(ref)} className="truncate hover:text-zk-text">{project.name}</Link>
-        <span aria-hidden="true">›</span>
-        <Link href={goalsPath(ref)} className="hover:text-zk-text">Goals</Link>
-        <span aria-hidden="true">›</span>
-        <h1 aria-current="page" className="truncate font-semibold text-zk-text">{goal.title}</h1>
-      </nav>
-
       {/* The pool itself: what it holds, what is carved out, what is left. */}
       <section aria-label="Budget pool" className="rounded-[20px] border border-zk-border bg-zk-surface p-5" data-testid="goal-detail">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-lg font-extrabold tracking-tight text-zk-text">{goal.title}</h2>
+            <h1 className="text-lg font-extrabold tracking-tight text-zk-text">{goal.title}</h1>
             <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-[0.06em] ${STATUS_BADGE[goal.status] ?? "bg-zk-chip text-zk-muted"}`}>
               {goal.status}
             </span>

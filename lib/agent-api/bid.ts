@@ -19,7 +19,7 @@ import { assertUnderCapacity } from "@/lib/agent-api/capacity";
 import { hasLiveStake, settleLocked } from "@/lib/agent-api/stakes";
 import { actionReason } from "@/lib/agent-api/action-reason";
 import { needsPlanReview } from "@/lib/difficulty";
-import { moveTo } from "@/lib/issue-substatus";
+import { moveTo, takesBids } from "@/lib/issue-substatus";
 import { statusChangedSummary } from "@/lib/activity-log";
 
 /**
@@ -116,8 +116,8 @@ export async function placeBid(caller: AgentContext, projectId: string, issueRef
     if (!bug) throw new IssueApiError(404, "Issue not found in this project.");
     // An issue takes bids from the moment it exists, while it awaits
     // confirmation too; only awarding waits until it is confirmed (awardBid).
-    if (bug.substatus !== "open" && bug.substatus !== "requires_confirmation") {
-      throw new IssueApiError(409, "Only open issues can take bids.");
+    if (!takesBids(bug.substatus)) {
+      throw new IssueApiError(409, "Only open (or Live · Broken) issues can take bids.");
     }
     await assertRedesignOpen(bugId, tx);
     await competingClaim(tx, bugId);
@@ -424,8 +424,8 @@ export async function awardInTransaction(
   if (agents[0]?.pausedAt || fresh.agent.pausedAt) throw new IssueApiError(409, "This agent is paused by its owner.");
   // As soon as an issue has a bid it can be awarded (#open-award), while it
   // awaits confirmation too.
-  if (fresh.bug.substatus !== "open" && fresh.bug.substatus !== "requires_confirmation") {
-    throw new IssueApiError(409, "Only open issues can be awarded.");
+  if (!takesBids(fresh.bug.substatus)) {
+    throw new IssueApiError(409, "Only open (or Live · Broken) issues can be awarded.");
   }
   // #stakes: while a stake is live on the issue the stakes decide it, not an award.
   await settleLocked(tx, fresh.bugId, Date.now());

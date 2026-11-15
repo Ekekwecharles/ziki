@@ -11,7 +11,7 @@ import { assigneeChangedSummary, statusChangedSummary } from "@/lib/activity-log
 import { ensureWatching } from "@/lib/watch";
 import { deliveryDeadline, deliveryWindowMinutes } from "@/lib/claim-deadline";
 import { parseIssueRef, resolveIssueRef } from "@/lib/issue-ref";
-import { moveTo } from "@/lib/issue-substatus";
+import { AWARDABLE_SUBSTATUSES, moveTo } from "@/lib/issue-substatus";
 import { releasePlanningClaim } from "@/lib/agent-api/plan";
 import { notifyLater } from "@/lib/notify";
 
@@ -143,7 +143,7 @@ export async function acceptOffer(agent: AgentContext, claimId: string) {
           payload: { claimId: fresh.id, issueId: fresh.bugId, beneficiaryUserId: fresh.beneficiaryUserId, reason: "capacity" } });
         return { unavailable: true as const };
       }
-      if (fresh.bug.substatus !== "open" || !canAssignTicket({ actorId: fresh.beneficiaryUserId, actorRole: "user", currentAssigneeId: fresh.bug.assigneeId, targetAssigneeId: fresh.beneficiaryUserId, claimed: true })) {
+      if (!AWARDABLE_SUBSTATUSES.includes(fresh.bug.substatus) || !canAssignTicket({ actorId: fresh.beneficiaryUserId, actorRole: "user", currentAssigneeId: fresh.bug.assigneeId, targetAssigneeId: fresh.beneficiaryUserId, claimed: true })) {
         await tx.issueClaim.update({ where: { id: fresh.id }, data: { status: "released", releasedAt: now, releaseReason: "unavailable" } });
         await publish(tx, { organisationId: agent.organisationId, type: "claim.released", actorAgentId: agent.agentId, bugId: fresh.bugId,
           payload: { claimId: fresh.id, issueId: fresh.bugId, beneficiaryUserId: fresh.beneficiaryUserId, reason: "unavailable" } });
@@ -154,7 +154,7 @@ export async function acceptOffer(agent: AgentContext, claimId: string) {
       const issue = await tx.bug.update({ where: { id: fresh.bugId }, data: { assigneeId: fresh.beneficiaryUserId, ...moveTo("in_progress") }, select: { id: true, assigneeId: true, status: true, substatus: true } });
       await tx.bugActivity.createMany({ data: [
         ...(fresh.bug.assigneeId !== fresh.beneficiaryUserId ? [{ bugId: fresh.bugId, actorId: fresh.beneficiaryUserId, type: "assignee_changed" as const, summary: assigneeChangedSummary(fresh.bug.assignee?.name ?? null, fresh.beneficiary.name), metadata: { field: "assignee", from: fresh.bug.assigneeId, to: fresh.beneficiaryUserId } }] : []),
-        { bugId: fresh.bugId, actorId: fresh.beneficiaryUserId, type: "status_changed", summary: statusChangedSummary("open", "in_progress"), metadata: { field: "status", from: "open", to: "in_progress" } },
+        { bugId: fresh.bugId, actorId: fresh.beneficiaryUserId, type: "status_changed", summary: statusChangedSummary(fresh.bug.substatus, "in_progress"), metadata: { field: "status", from: fresh.bug.substatus, to: "in_progress" } },
       ] });
       await ensureWatching(tx, fresh.bugId, [fresh.beneficiaryUserId]);
       // An accepted bid award: the other open bids on the issue are withdrawn.

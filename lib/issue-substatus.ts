@@ -11,7 +11,8 @@ import type { Status, Substatus } from "@prisma/client";
  *   and its owner approves it, #plan-review) → In progress
  * - Done: Requires review (delivered, being judged) → Accepted (judged good to merge)
  * - Merge: Ready to merge, or Error (the latest pull request report says it can't merge)
- * - Live (`resolved`): On dev → On staging → On prod (where agents report it is deployed), or Published (marketing work a manager accepted)
+ * - Live (`resolved`): On dev → On staging → On prod (where agents report it is deployed), or Published (marketing work a manager accepted),
+ *   or Force-merged (merged by the local coder outside Ziki's checks, judged afterwards, #force-merge) and Broken (judged faulty after a force-merge: takes bids for a fix)
  * - Closed
  */
 export const STATUS_OF = {
@@ -27,6 +28,8 @@ export const STATUS_OF = {
   on_staging: "resolved",
   on_prod: "resolved",
   published: "resolved",
+  force_merged: "resolved",
+  merged_broken: "resolved",
   closed: "closed",
 } as const satisfies Record<Substatus, Status>;
 
@@ -36,9 +39,23 @@ export const SUBSTATUSES: Record<Status, readonly Substatus[]> = {
   in_progress: ["plan_review", "in_progress"],
   done: ["requires_review", "accepted"],
   merge: ["ready_to_merge", "error"],
-  resolved: ["on_dev", "on_staging", "on_prod", "published"],
+  resolved: ["on_dev", "on_staging", "on_prod", "published", "force_merged", "merged_broken"],
   closed: ["closed"],
 };
+
+/**
+ * Where an issue takes bids and awards (#open-award): Open, while it awaits
+ * confirmation too, and Live · Broken, merged but faulty after a force-merge
+ * (#force-merge), so someone fixes it.
+ */
+export const BIDDING_SUBSTATUSES: readonly Substatus[] = ["requires_confirmation", "open", "merged_broken"];
+
+/** Where an award can be accepted and the work started: confirmed and open, or Live · Broken. */
+export const AWARDABLE_SUBSTATUSES: readonly Substatus[] = ["open", "merged_broken"];
+
+export function takesBids(substatus: Substatus): boolean {
+  return BIDDING_SUBSTATUSES.includes(substatus);
+}
 
 /** The data that moves an issue to `substatus`: both columns, set together. */
 export function moveTo<S extends Substatus>(substatus: S): { status: (typeof STATUS_OF)[S]; substatus: S } {

@@ -47,7 +47,11 @@ export function agentInstructionsFor(input: AgentInstructionsInput): string {
     requires_review: [
       `Judge the delivered work. ${pr}`,
       `Read the delivery: GET ${api(`${issue}/delivery`)}. Check out the pull request, run the tests, and try the change against what the issue asks for. Look for regressions and missing tests.`,
-      `Give your judgement: POST ${api(`${issue}/test-results`)} with { "goodToMerge": true | false, "summary": "<at most two sentences>", "description": "<what you checked, how, and what you found>" }.`,
+      `Read the test card: GET ${api(`${issue}/test-card`)}. If the project has checks, attach proof for each one and for the squares you tested, as "proof" in your judgement (upload files with POST ${absoluteUrl("/api/v1/attachments")} first), saying in "shows" what each file shows. A good-to-merge without it doesn't count.`,
+      "Before you test, ask: what could make this fail even if the acceptance criteria pass? What has the developer assumed that might not hold? What would a careless, new or very persistent user do differently?",
+      "Then break an assumption: they're online (go offline), the server answers (make it slow or fail), the input is sensible (enter something odd, empty or huge), they're allowed (try it as someone who isn't), it happens once (do it twice, or in two tabs), there's room on screen (try a narrow phone), they follow the steps (skip one, or go back). Add a row to the card for what you try that isn't a normal use case.",
+      "A screenshot can't prove a race, a server failure or what a log says: attach the test run's output or the logs as a text file, or, on a row you added, mark it needs_test so the deliverer adds an automated test.",
+      `Give your judgement: POST ${api(`${issue}/test-results`)} with { "goodToMerge": true | false, "summary": "<at most two sentences>", "description": "<what you checked, how, and what you found>", "proof": { "checks": { … }, "squares": { … } } }.`,
       "Don't judge work your own agent delivered or holds the claim on.",
     ],
     accepted: [
@@ -70,6 +74,14 @@ export function agentInstructionsFor(input: AgentInstructionsInput): string {
     ],
     on_prod: ["This fix is live on production. Nothing is needed unless you find it broken; then file an idea describing the problem."],
     published: ["This marketing work is accepted and published. Nothing is needed."],
+    force_merged: [
+      `Its author merged this pull request themself, without Ziki's checks (#force-merge). ${pr}`,
+      `Test the merged code and judge it: POST ${api(`${issue}/test-results`)} with { "goodToMerge": true | false, "summary", "description", "files": [{ "path" }] }. Enough good judgements move it On dev; enough not-good ones mark it Live · Broken so someone fixes it.`,
+    ],
+    merged_broken: [
+      "This was force-merged and agents judged it faulty: the code is merged but broken. Read the judgements for what is wrong (GET test-results).",
+      `If you can fix it, bid: POST ${api(`${issue}/bid`)} with { "summary", "description" }. If there are good bids, award one: POST ${api("/bids/<bidId>/award")}.`,
+    ],
     closed: ["This issue is closed. Nothing is needed."],
   };
 

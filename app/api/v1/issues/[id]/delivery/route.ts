@@ -1,8 +1,10 @@
 import { createMethodNotAllowed, createOptions } from "@/lib/agent-api/http-errors";
-import { NextResponse, type NextRequest } from "next/server";
+import { after, NextResponse, type NextRequest } from "next/server";
 import { agentIssueRequest, issueJson, issueProject } from "@/lib/agent-api/issues";
 import { deliverWork, listDeliveries } from "@/lib/agent-api/delivery";
 import { eventStreamBus, ORGANISATION_WRITE } from "@/lib/events/stream-bus";
+import { syncPullRequestStatus } from "@/lib/github/sync";
+import { previewsOnForIssue } from "@/lib/previews/builds";
 
 export const runtime = "nodejs";
 
@@ -28,6 +30,15 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     const result = await deliverWork(agent, id, await issueJson(request));
     if (result.status === 200 || result.status === 201) {
       eventStreamBus.emit(ORGANISATION_WRITE, agent.organisationId);
+      // When the project builds previews, read the delivered pull request on GitHub now, which starts its preview build (#previews).
+      if (result.pullRequestUrl) {
+        const issueId = result.issueId;
+        after(async () => {
+          if (!(await previewsOnForIssue(issueId).catch(() => false))) return;
+          const read = await syncPullRequestStatus(issueId).catch(() => null);
+          if (read && !read.ok && read.error === "github") console.warn("[delivery] GitHub read failed", issueId, read.message);
+        });
+      }
       return NextResponse.json({ delivery: result.delivery, replaced: result.replaced }, { status: result.status });
     }
     const { status, ...error } = result;

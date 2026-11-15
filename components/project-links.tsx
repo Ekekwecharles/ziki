@@ -55,28 +55,16 @@ function LinksIcon({ size }: { size: number }) {
 const ICON_BUTTON =
   "relative inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zk-border bg-zk-surface text-zk-text2 hover:bg-zk-chip hover:text-zk-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-electric-blue";
 
-/** Beside the stage tabs, at the top right: Goals, Project notes and the project's settings, as icons only. */
+/** Beside the stage tabs, at the top right: Project notes and the project's settings, as icons only. Goals are on Project Overview. */
 export function ProjectIconLinks({
-  goalsHref,
   notesHref,
   settingsHref,
 }: {
-  goalsHref?: string;
   notesHref?: string;
   settingsHref?: string;
 }) {
   return (
     <>
-      {goalsHref ? (
-        <Link href={goalsHref} aria-label="Goals and budgets" title="Goals and budgets" className={ICON_BUTTON}>
-          {/* A target: the pool aimed at the work it funds. */}
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="9" />
-            <circle cx="12" cy="12" r="5" />
-            <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
-          </svg>
-        </Link>
-      ) : null}
       {notesHref ? (
         <Link href={notesHref} aria-label="Project notes" title="Project notes" className={ICON_BUTTON}>
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="3" width="15" height="18" rx="2" /><path d="M9 3v18M3 7h4M3 12h4M3 17h4M12 8h5M12 12h5" /></svg>

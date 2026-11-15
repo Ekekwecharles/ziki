@@ -60,6 +60,8 @@ export default async function AppLayout({
   }
 
   const reqPath = (await headers()).get("x-ziki-path") ?? "";
+  // A guest on /security gets the public Ziki Security page, which brings its own header and footer.
+  if (!session?.user && reqPath === "/security") return <>{children}</>;
   const intakeSegments = !session?.user ? publicIntakeSegments(reqPath) : null;
   const overviewSegments = !session?.user ? projectOverviewSegments(reqPath) ?? intakeSegments : null;
   const overviewProject = overviewSegments
@@ -218,7 +220,7 @@ export default async function AppLayout({
         prisma.agentRequest.groupBy({ by: ["agentId"], where: { agentId: { in: ids }, doneAt: null }, _count: { _all: true } }),
       ]);
       const pendingBy = new Map(pending.map((row) => [row.agentId, row._count._all]));
-      dockAgents = agents.map((agent) => ({ id: agent.id, name: agent.name, username: agent.username, avatar: agent.avatar, status: agent.status, activity: agent.activity, issue: agent.issue, question: agent.question, earnedPoints: earned.get(agent.id) ?? 0, ...(activity.get(agent.id) ?? { bids: 0, comments: 0, pointsToday: 0 }), pendingRequests: pendingBy.get(agent.id) ?? 0 }));
+      dockAgents = agents.map((agent) => ({ id: agent.id, name: agent.name, username: agent.username, avatar: agent.avatar, status: agent.status, activity: agent.activity, issue: agent.issue, question: agent.question, needsSetup: agent.needsSetup, earnedPoints: earned.get(agent.id) ?? 0, ...(activity.get(agent.id) ?? { bids: 0, comments: 0, pointsToday: 0 }), pendingRequests: pendingBy.get(agent.id) ?? 0 }));
     } catch (error) {
       console.error("[layout] agents failed", error);
     }

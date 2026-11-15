@@ -4,7 +4,7 @@ import type { OrganisationNextStep } from "@/lib/organisation-next-step";
 
 /**
  * The single next thing for this person in this organisation (#agents-dock), at
- * the top of the project's ideas and issues lists where AgentSetupNotice sits,
+ * the top of the project's ideas and issues lists,
  * and with the same look: a quiet card and one primary pill. What it says comes
  * from organisationNextStep (lib/organisation-next-step.ts); Dismiss hides it for this
  * organisation on this device.

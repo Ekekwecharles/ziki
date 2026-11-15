@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { requireProject } from "@/lib/project-route";
-import { ideasPath, issuesPath, projectPath } from "@/lib/project-paths";
+import { issuesPath, projectPath } from "@/lib/project-paths";
 import { humanNotesActor, readProjectNotes, listNoteComments, listNoteRevisions } from "@/lib/project-notes";
 import { RichText } from "@/components/rich-text";
 import { NotesDocument } from "./notes-document";
@@ -32,7 +32,7 @@ export default async function NotesPage({ params: routeParams, searchParams }: {
   return (
     <div className="mx-auto w-full max-w-6xl space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-sm text-zk-text2"><Link href={ideasPath(slug)} className="truncate hover:text-zk-text">{project.name}</Link><span aria-hidden="true">›</span><h1 aria-current="page" className="font-semibold text-zk-text">Notes</h1></nav>
+        <h1 className="text-lg font-extrabold tracking-tight text-zk-text">Project notes</h1>
         <div className="flex items-center gap-2">
           <AddNoteButton />
           <Link href={issuesPath(slug)} className="rounded-lg border border-zk-border px-3 py-2 text-sm font-semibold text-zk-text hover:bg-zk-chip">Back to issues</Link>

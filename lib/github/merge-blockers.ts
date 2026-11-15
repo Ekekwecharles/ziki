@@ -1,4 +1,5 @@
 import type { PullRequestSnapshot, SnapshotCheck } from "@/lib/github/snapshot-types";
+import { sameCommit } from "@/lib/github/commit-sha";
 
 /**
  * Why GitHub won't merge a pull request, in plain words (#github-status).
@@ -254,7 +255,7 @@ export function diagnose(snapshot: PullRequestSnapshot, context: DiagnosisContex
     });
   }
 
-  if (context.reviewedHeadSha && snapshot.headSha && context.reviewedHeadSha !== snapshot.headSha) {
+  if (context.reviewedHeadSha && snapshot.headSha && !sameCommit(context.reviewedHeadSha, snapshot.headSha)) {
     blockers.push({
       id: "head_moved",
       kind: "head_moved",

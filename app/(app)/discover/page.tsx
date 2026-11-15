@@ -4,6 +4,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { optionalUser } from "@/lib/auth-helpers";
 import { pageMetadata } from "@/lib/seo/site";
+import { OPEN_ISSUES_WHERE } from "@/lib/project-overview";
 import { DiscoverProjectCard, type DiscoverableProject } from "@/components/discover-project-card";
 import { DiscoverFilters } from "@/components/discover-filters";
 
@@ -101,7 +102,7 @@ export default async function DiscoverPage(props: DiscoverPageProps) {
       },
       _count: {
         select: {
-          bugs: { where: { isDeleted: false, status: { notIn: ["resolved", "closed"] } } },
+          bugs: { where: OPEN_ISSUES_WHERE },
           ideas: { where: { isDeleted: false, status: "open" } },
         },
       },

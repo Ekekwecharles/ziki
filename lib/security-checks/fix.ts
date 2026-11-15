@@ -1,12 +1,15 @@
 import "server-only";
 
 import type { Prisma, PrismaClient, SecuritySeverity } from "@prisma/client";
+import { SECURITY_SEVERITIES } from "@/lib/security-severity";
 import { z } from "zod";
 import { convertClientVettedIdea } from "@/lib/agent-api/idea-verdicts";
 import { issuePath } from "@/lib/issue-ref";
 import { prisma } from "@/lib/prisma";
 import { refOf } from "@/lib/project-paths";
-import { isCheckPaid, isReportPosted } from "@/lib/security-checks";
+import { isReportPosted } from "@/lib/security-checks";
+import { CoinError } from "@/lib/coins/ledger";
+import { findingPrice, payForFindings } from "@/lib/security-checks/payment";
 import { createFinding, PLACEHOLDER_DESCRIPTION, PLACEHOLDER_SUMMARY, placeholderTitle } from "@/lib/security-findings";
 
 const id = z.string().trim().min(1).max(128);
@@ -20,15 +23,15 @@ export const fixSelection = z.object({
 export type FixProject = { id: string; name: string };
 export type FixOptions = { projects: FixProject[]; projectId: string | null };
 export type FixOutcome =
-  | { ok: true; created: number; reused: number; issues: { number: number; href: string }[] }
+  | { ok: true; created: number; reused: number; coins: number; issues: { resultId: string; number: number; href: string }[] }
   | { ok: false; error: string };
 
 type Client = { userId: string; organisationId: string; superAdmin: boolean };
-type Check = { paidAt: Date | null; postedAt: Date | null; projectId: string | null };
+type Check = { postedAt: Date | null; projectId: string | null };
 type Result = { id: string; severity: SecuritySeverity; finding: { bug: { number: number } | null } | null };
 
 const unavailable = { ok: false, error: "This check is unavailable in your workspace." } as const;
-const unpaid = { ok: false, error: "Pay for this check before sending findings to a project." } as const;
+
 
 // Workspace members can contribute to its projects under the board's existing
 // access rules. Recheck membership in the same query that scopes the project.
@@ -45,10 +48,15 @@ function eligibleProjects(client: Client): Prisma.ProjectWhereInput {
 
 export async function listFixProjects(client: Client, checkId: string, db = prisma): Promise<FixOptions | null> {
   const check = await db.securityCheck.findFirst({
-    where: { id: checkId, requestedById: client.userId, organisationId: client.organisationId },
-    select: { paidAt: true, postedAt: true, projectId: true },
+    where: {
+      id: checkId,
+      requestedById: client.userId,
+      organisationId: client.organisationId,
+
+    },
+    select: { postedAt: true, projectId: true },
   });
-  if (!check || !isCheckPaid(check) || !isReportPosted(check)) return null;
+  if (!check || !isReportPosted(check)) return null;
   const projects = await db.project.findMany({
     where: { ...eligibleProjects(client), ...(check.projectId ? { id: check.projectId } : {}) },
     orderBy: [{ name: "asc" }, { id: "asc" }],
@@ -68,13 +76,12 @@ export async function sendCheckFindings(
     // The check row serializes all submissions for this report. A waiter reads
     // the committed destination and finding links after the preceding commit.
     const [check] = await tx.$queryRaw<Check[]>`
-      SELECT "paidAt", "postedAt", "projectId" FROM "SecurityCheck"
+      SELECT "postedAt", "projectId" FROM "SecurityCheck"
       WHERE "id" = ${checkId} AND "organisationId" = ${client.organisationId}
         AND "requestedById" = ${client.userId}
       FOR NO KEY UPDATE
     `;
     if (!check) return unavailable;
-    if (!isCheckPaid(check)) return unpaid;
     if (!isReportPosted(check)) return { ok: false, error: "Wait for the report to be posted before sending findings." };
     const project = await tx.project.findFirst({
       where: { ...eligibleProjects(client), id: projectId },
@@ -93,18 +100,32 @@ export async function sendCheckFindings(
       return { ok: false, error: "One or more selected findings are unavailable in this check." };
     }
 
+    // The findings being sent are paid for in Ziks from the client's wallet, in this same transaction. Short of Ziks,
+    // nothing is charged, unlocked or created.
+    let paid;
+    try {
+      paid = await payForFindings(tx, client.userId, checkId, results.filter((result) => !result.finding).map((result) => result.id));
+    } catch (error) {
+      if (error instanceof CoinError && error.code === "closed") return { ok: false, error: "These findings changed while you were sending them. Try again." };
+      throw error;
+    }
+    if (!paid.ok) {
+      return { ok: false, error: `You need ${paid.needed.toLocaleString("en-US")} Ziks to send these findings and have ${paid.balance.toLocaleString("en-US")}. Buy Ziks on your Ziks page.` };
+    }
+    const { coins } = paid;
+
     let created = 0;
-    const issues: { number: number; href: string }[] = [];
+    const issues: { resultId: string; number: number; href: string }[] = [];
     for (const result of results) {
       const number = result.finding
         ? result.finding.bug?.number
         : await createResultIssue(tx, client, projectId, checkId, result);
       if (!result.finding) created += 1;
-      if (number !== undefined) issues.push({ number, href: issuePath(refOf(project), number) });
+      if (number !== undefined) issues.push({ resultId: result.id, number, href: issuePath(refOf(project), number) });
     }
     if (!check.projectId) await tx.securityCheck.update({ where: { id: checkId }, data: { projectId } });
-    return { ok: true, created, reused: results.length - created, issues };
-  }, { timeout: 30_000 });
+    return { ok: true, created, reused: results.length - created, coins, issues };
+  }, { timeout: 30_000, isolationLevel: "ReadCommitted" });
 }
 
 async function createResultIssue(tx: Prisma.TransactionClient, client: Client, projectId: string, checkId: string, result: Result) {
@@ -143,4 +164,38 @@ async function createResultIssue(tx: Prisma.TransactionClient, client: Client, p
   const issue = await convertClientVettedIdea(tx, scope, idea.id, client.userId);
   await tx.securityCheckResult.update({ where: { id: result.id }, data: { findingId: finding.id } });
   return issue.issueNumber;
+}
+
+export async function loadMovePage(client: Client, checkId: string, db = prisma) {
+  const parsed = fixCheckId.safeParse(checkId);
+  if (!parsed.success) return null;
+  const check = await db.securityCheck.findFirst({
+    where: { id: parsed.data, organisationId: client.organisationId, requestedById: client.userId },
+    select: { postedAt: true, target: { select: { value: true } } },
+  });
+  if (!check) return null;
+  const results = check.postedAt ? await db.securityCheckResult.findMany({
+    where: { checkId: parsed.data },
+    select: {
+      id: true, severity: true, title: true, priceCoins: true, unlockedAt: true, findingId: true,
+      finding: { select: { bug: { select: {
+        number: true, project: { select: { slug: true, organisation: { select: { slug: true } } } },
+      } } } },
+    },
+    orderBy: { id: "asc" },
+  }) : [];
+  return {
+    asset: check.target.value,
+    posted: Boolean(check.postedAt),
+    results: results.sort((a, b) => SECURITY_SEVERITIES.indexOf(a.severity) - SECURITY_SEVERITIES.indexOf(b.severity))
+      .map((result) => {
+        const issue = result.finding?.bug;
+        return {
+          id: result.id, severity: result.severity, title: result.title,
+          price: result.unlockedAt || result.findingId ? 0 : findingPrice(result),
+          moved: Boolean(result.findingId),
+          issue: issue && { number: issue.number, href: issuePath(refOf(issue.project), issue.number) },
+        };
+      }),
+  };
 }

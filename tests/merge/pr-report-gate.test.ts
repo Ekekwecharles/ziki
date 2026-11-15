@@ -188,6 +188,12 @@ describe("prGate (#pr-reports)", () => {
     expect(gate.reason).toContain("head moved");
   });
 
+  it("lets a full reported ID match a short delivered ID of the same commit (#921)", () => {
+    const full = "5d65ad148f547748eef71071dfbbb7e3a97567db";
+    expect(prGate(report({ headSha: full }), issue({ pullRequestHeadSha: "5d65ad14" }))).toMatchObject({ canAccept: true, needsReport: false, reason: null });
+    expect(prGate(report({ headSha: full }), issue({ pullRequestHeadSha: "fedcba98" }))).toMatchObject({ canAccept: false, needsReport: true });
+  });
+
   it("refuses an accept on failing checks or a conflict, without asking for a report", () => {
     expect(prGate(report({ checks: "failing" }), issue())).toMatchObject({ canDeliver: true, canAccept: false, needsReport: false });
     expect(prGate(report({ mergeable: false }), issue())).toMatchObject({ canAccept: false, needsReport: false });

@@ -8,18 +8,6 @@ import { currentOrganisationIdFor, notificationInOrganisation } from "@/lib/orga
 import { notificationTrackWhere } from "@/lib/my-work-filter";
 import type { WorkTrack } from "@prisma/client";
 
-/** A bounded preview, scoped exactly like the current organisation's feed (#615). */
-export async function recentNotificationsAction() {
-  const user = await requireUser();
-  const organisationId = await currentOrganisationIdFor(user.id);
-  return prisma.notification.findMany({
-    where: { userId: user.id, ...notificationInOrganisation(organisationId) },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: 8,
-    select: { id: true, title: true, readAt: true, createdAt: true },
-  });
-}
-
 /** Marks all of the current user's notifications as read (#216). */
 export async function markAllNotificationsReadAction(
   allOrganisations = false,

@@ -1,31 +1,26 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
-import { CopyProjectIdButton } from "@/app/(app)/projects/copy-project-id";
-import { ideasPath, issuesPath, projectRef } from "@/lib/project-paths";
+import { issuesPath, projectRef } from "@/lib/project-paths";
 import { NewProjectButton } from "@/app/(app)/[org]/new-project-form";
-import {
-  deleteProjectAction,
-  setProjectArchivedAction,
-} from "@/app/(app)/projects/actions";
-import { MissionCoverage } from "@/app/(app)/projects/mission-coverage";
-import { ProjectRewardRulesDisplay } from "@/components/project-reward-rules-display";
-import {
-  getPlatformRewardConfig,
-  projectDefaultsFromPlatform,
-} from "@/lib/points/platform-rewards";
-import { parseProjectRewardConfig } from "@/lib/points/project-rewards";
+import { setProjectArchivedAction } from "@/app/(app)/projects/actions";
+import { getPlatformRewardConfig, projectDefaultsFromPlatform } from "@/lib/points/platform-rewards";
 import { loadOrg } from "../org-context";
 import { OrgMessages, OrgPageHeader, oneParam } from "../org-ui";
 
 /* Distinct browser-tab title; the root layout appends the site name. */
 export const metadata = { title: "Projects" };
 
+/** A project's settings page, at its first section. */
+function settingsHref(slug: string): string {
+  return `/projects/${encodeURIComponent(slug)}/settings`;
+}
+
 /**
- * The organisation's one projects list: switch, create, and, for owners and
- * admins, each project's settings. Owners archive and delete projects.
+ * The organisation's projects (#project-urls): one row each, opening the
+ * project or (for owners and admins) its settings, where everything about it
+ * lives: details, GitHub, workflow, goals, archiving and deleting. Owners
+ * restore archived projects here.
  */
 export default async function OrgProjectsPage({
   params: routeParams,
@@ -39,207 +34,85 @@ export default async function OrgProjectsPage({
   const { org } = await loadOrg();
   if (!org) return null;
   const params = await searchParams;
-  const organisationId = org.id;
-  const canManageProjects = org.admin;
-  const isOwner = org.owner;
+  const canManage = org.admin;
 
   const [projects, platformRewards] = await Promise.all([
     prisma.project.findMany({
-      where: { organisationId },
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        archivedAt: true,
-        createdAt: true,
-        rewardConfig: true,
-        githubInstallationId: true,
-        _count: { select: { bugs: true } },
-        testMissions: {
-          select: {
-            id: true,
-            routePattern: true,
-            brief: true,
-            role: true,
-            viewport: true,
-            lastCoveredAt: true,
-            issuesFiled: true,
-          },
-          orderBy: [{ routePattern: "asc" }, { role: "asc" }, { viewport: "asc" }],
-        },
-      },
-      orderBy: { createdAt: "asc" },
+      where: { organisationId: org.id },
+      select: { id: true, name: true, slug: true, archivedAt: true, githubInstallationId: true, _count: { select: { bugs: true } } },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
     getPlatformRewardConfig(prisma),
   ]);
-  const platformDefaults = projectDefaultsFromPlatform(platformRewards);
-  const activeProjects = projects.filter((project) => !project.archivedAt);
-  const archivedProjects = projects.filter((project) => project.archivedAt);
+  const active = projects.filter((project) => !project.archivedAt);
+  const archived = projects.filter((project) => project.archivedAt);
+  const current = decodeURIComponent(currentSlug);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <OrgPageHeader title="Projects">
-        A project is one product inside {org.name}, such as a web app. The issue list follows the
-        project selected in the bar.{canManageProjects ? " Open a project's settings for its workflow, areas and GitHub App." : ""}
+        One project per product inside {org.name}, such as a web app.
+        {canManage ? " Each project's settings hold its details, GitHub, workflow, goals and archiving." : ""}
       </OrgPageHeader>
 
       <OrgMessages error={oneParam(params.error)} notice={oneParam(params.notice)} />
 
-      <div>
-        <NewProjectButton orgSlug={org.slug} defaults={platformDefaults} />
-      </div>
-
-      <section className="overflow-hidden rounded-[20px] border border-zk-border bg-zk-surface">
-        <div className="border-b border-zk-border bg-zk-tint px-4 py-3 sm:px-6">
-          <h3 className="text-base font-semibold text-zk-text">
-            Your projects
-          </h3>
-          <p className="mt-0.5 text-xs text-zk-muted">
-            Switching here also changes the project shown in the header.
-          </p>
+      <section aria-labelledby="projects-heading" className="overflow-hidden rounded-[20px] border border-zk-border bg-zk-surface">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zk-border px-5 py-4">
+          <div>
+            <h2 id="projects-heading" className="m-0 text-base font-bold text-zk-text">
+              {active.length === 1 ? "1 project" : `${active.length} projects`}
+            </h2>
+            <p className="m-0 mt-0.5 text-xs text-zk-muted">Open one to work in it.</p>
+          </div>
+          <NewProjectButton orgSlug={org.slug} defaults={projectDefaultsFromPlatform(platformRewards)} />
         </div>
-        {activeProjects.length === 0 ? (
-          archivedProjects.length > 0 ? (
-            <p className="px-4 py-6 text-sm text-zk-text2 sm:px-6">
-              No active projects. Restore one below or create a new one.
-            </p>
-          ) : (
-            <div className="space-y-2 px-4 py-6 text-sm text-zk-text2 sm:px-6">
-              <p className="font-medium text-zk-text">No projects yet. Create the first one above.</p>
-              <p>
-                Make one project per product you track, so each gets its own issues. For example, a
-                software team might have <span className="font-medium">Web app</span>,{" "}
-                <span className="font-medium">iOS app</span> and <span className="font-medium">Desktop app</span>;
-                an agency might have one per client.
-              </p>
-              <p>
-                Each project also gets a short id made from its name (Web app → <code>web-app</code>), used in
-                links and by agents.
-              </p>
-            </div>
-          )
+
+        {active.length === 0 ? (
+          <p className="m-0 px-5 py-8 text-center text-sm text-zk-text2">
+            {archived.length ? "No active projects. Restore one below, or create a new one." : "No projects yet. Create the first one."}
+          </p>
         ) : (
-          <ul className="divide-y divide-zk-border">
-            {activeProjects.map((project) => {
-              const active = project.slug === decodeURIComponent(currentSlug);
+          <ul className="m-0 list-none divide-y divide-zk-divider p-0">
+            {active.map((project) => {
+              const here = project.slug === current;
               return (
-                <li
-                  key={project.id}
-                  className="flex flex-wrap items-center gap-3 px-4 py-3 sm:px-6"
-                >
+                <li key={project.id} className="flex items-center gap-4 px-5 py-3.5">
+                  <span
+                    aria-hidden="true"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-zk-tint text-sm font-extrabold uppercase text-zk-accent"
+                  >
+                    {project.name.slice(0, 1)}
+                  </span>
                   <div className="min-w-0 flex-1">
-                    <p className="flex items-center gap-2 text-sm font-medium text-zk-text">
-                      <span className="truncate">{project.name}</span>
-                      {active ? (
-                        <Badge className="rounded-full bg-zk-tint text-zk-accent ring-1 ring-zk-border">
-                          Active
-                        </Badge>
-                      ) : null}
-                    </p>
-                    <p className="mt-0.5 text-xs text-zk-muted">
-                      {project.slug} · {project._count.bugs}{" "}
-                      {project._count.bugs === 1 ? "issue" : "issues"}
-                    </p>
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <span className="text-xs text-zk-muted">Project ID:</span>
-                      <code className="rounded bg-zk-chip px-1.5 py-0.5 font-mono text-[11px] text-zk-text2">
-                        {project.id}
-                      </code>
-                      <CopyProjectIdButton projectId={project.id} />
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                      <span className={project.githubInstallationId ? "font-semibold text-zk-ok-fg" : "text-zk-muted"}>
-                        {project.githubInstallationId ? "GitHub App connected" : "GitHub App not connected"}
-                      </span>
-                      {canManageProjects ? (
-                        <>
-                          <Link href={`/projects/${encodeURIComponent(project.slug)}/settings`} className="font-medium text-zk-accent hover:underline">
-                            Settings
-                          </Link>
-                          <Link href={`/projects/${encodeURIComponent(project.slug)}/settings/github`} className="font-medium text-zk-accent hover:underline">
-                            GitHub
-                          </Link>
-                        </>
-                      ) : null}
-                      <Link href={issuesPath(projectRef(org.slug, project.slug), "all")} className="font-medium text-zk-accent hover:underline">
-                        Issues
+                    <p className="m-0 flex items-center gap-2 text-sm font-bold text-zk-text">
+                      <Link href={issuesPath(projectRef(org.slug, project.slug), "your_work")} className="truncate hover:text-zk-accent hover:underline">
+                        {project.name}
                       </Link>
-                    </div>
-                    <div className="mt-3">
-                      <ProjectRewardRulesDisplay
-                        rewardConfig={parseProjectRewardConfig(project.rewardConfig, platformDefaults)}
-                        defaults={platformDefaults}
-                        customized={Boolean(project.rewardConfig)}
-                      />
-                    </div>
-                    <MissionCoverage
-                      projectId={project.id}
-                      canManage={canManageProjects}
-                      missions={project.testMissions.map((mission) => ({
-                        ...mission,
-                        lastCoveredAt: mission.lastCoveredAt?.toISOString() ?? null,
-                      }))}
-                    />
-
-                    {isOwner ? (
-                      <details className="mt-3 text-xs text-zk-text2">
-                        <summary className="cursor-pointer font-medium text-zk-text2">
-                          Archive or delete
-                        </summary>
-                        <div className="mt-2 space-y-4 rounded-xl border border-zk-border bg-zk-tint p-3">
-                          <form action={setProjectArchivedAction}>
-                            <input type="hidden" name="projectId" value={project.id} />
-                            <input type="hidden" name="archived" value="true" />
-                            <ConfirmSubmitButton
-                              variant="secondary"
-                              confirm={{
-                                title: `Archive ${project.name}?`,
-                                body: "It leaves the project switcher and can't be selected. Its issues stay, and you can restore it later.",
-                                confirmLabel: "Archive project",
-                              }}
-                            >
-                              Archive project
-                            </ConfirmSubmitButton>
-                          </form>
-
-                          <form action={deleteProjectAction} className="space-y-1">
-                            <input type="hidden" name="projectId" value={project.id} />
-                            <p className="font-medium text-zk-text2">Delete project</p>
-                            <p>
-                              Only works when the project has no issues. Otherwise archive it.
-                            </p>
-                            <label
-                              htmlFor={`confirm-delete-${project.id}`}
-                              className="block text-xs text-zk-text2"
-                            >
-                              Type {project.name} to confirm deleting it
-                            </label>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <input
-                                id={`confirm-delete-${project.id}`}
-                                name="confirmName"
-                                placeholder={`Type ${project.name}`}
-                                autoComplete="off"
-                                required
-                                className="min-w-0 flex-1 rounded-xl border border-zk-border px-2 py-1 text-sm text-zk-text"
-                              />
-                              <Button type="submit" variant="danger-secondary">
-                                Delete project
-                              </Button>
-                            </div>
-                          </form>
-                        </div>
-                      </details>
-                    ) : null}
+                      {here ? <span className="rounded-full bg-zk-tint px-2 py-0.5 text-[11px] font-bold text-zk-accent">Current</span> : null}
+                    </p>
+                    <p className="m-0 mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-zk-muted">
+                      <span className="font-mono">{project.slug}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{project._count.bugs === 1 ? "1 issue" : `${project._count.bugs} issues`}</span>
+                      <span aria-hidden="true">·</span>
+                      <span className={project.githubInstallationId ? "font-semibold text-zk-ok-fg" : ""}>
+                        {project.githubInstallationId ? "GitHub connected" : "GitHub not connected"}
+                      </span>
+                    </p>
                   </div>
-                  {active ? null : (
+                  {canManage ? (
                     <Link
-                      href={ideasPath(projectRef(org.slug, project.slug))}
-                      className="inline-flex items-center justify-center rounded-full border border-slate-300 bg-card px-3.5 py-2 text-sm font-medium text-slate-800 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
+                      href={settingsHref(project.slug)}
+                      className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-zk-border bg-zk-surface px-3.5 text-xs font-semibold text-zk-text hover:bg-zk-chip focus-visible:outline-2 focus-visible:outline-electric-blue"
                     >
-                      Switch to {project.name}
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="3" />
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                      </svg>
+                      Settings
                     </Link>
-                  )}
+                  ) : null}
                 </li>
               );
             })}
@@ -247,54 +120,31 @@ export default async function OrgProjectsPage({
         )}
       </section>
 
-      {isOwner && archivedProjects.length > 0 ? (
-        <section className="overflow-hidden rounded-[20px] border border-zk-border bg-zk-surface">
-          <div className="border-b border-zk-border bg-zk-tint px-4 py-3 sm:px-6">
-            <h3 className="text-base font-semibold text-zk-text">Archived projects</h3>
-            <p className="mt-0.5 text-xs text-zk-muted">
-              Archived projects are hidden from the switcher and can&apos;t be selected.
-              Restore one to use it again.
-            </p>
+      {org.owner && archived.length > 0 ? (
+        <section aria-labelledby="archived-heading" className="overflow-hidden rounded-[20px] border border-zk-border bg-zk-surface">
+          <div className="border-b border-zk-border px-5 py-4">
+            <h2 id="archived-heading" className="m-0 text-base font-bold text-zk-text">Archived</h2>
+            <p className="m-0 mt-0.5 text-xs text-zk-muted">Hidden from the project switcher. Restore one to use it again; delete it from its settings.</p>
           </div>
-          <ul className="divide-y divide-zk-border">
-            {archivedProjects.map((project) => (
-              <li key={project.id} className="space-y-3 px-4 py-3 sm:px-6">
-                <div>
-                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-zk-text">
-                    <span className="truncate">{project.name}</span>
-                    <Badge className="rounded-full bg-zk-warn-bg text-zk-warn-fg ring-1 ring-zk-warn-bd">
-                      Archived
-                    </Badge>
-                  </p>
-                  <p className="mt-0.5 text-xs text-zk-muted">
-                    {project.slug} · {project._count.bugs}{" "}
-                    {project._count.bugs === 1 ? "issue" : "issues"}
+          <ul className="m-0 list-none divide-y divide-zk-divider p-0">
+            {archived.map((project) => (
+              <li key={project.id} className="flex flex-wrap items-center gap-3 px-5 py-3.5">
+                <div className="min-w-0 flex-1">
+                  <p className="m-0 truncate text-sm font-semibold text-zk-text2">{project.name}</p>
+                  <p className="m-0 mt-0.5 text-xs text-zk-muted">
+                    <span className="font-mono">{project.slug}</span> · {project._count.bugs === 1 ? "1 issue" : `${project._count.bugs} issues`}
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <form action={setProjectArchivedAction}>
-                    <input type="hidden" name="projectId" value={project.id} />
-                    <input type="hidden" name="archived" value="false" />
-                    <Button type="submit" variant="secondary">
-                      Restore {project.name}
-                    </Button>
-                  </form>
-                  <form action={deleteProjectAction} className="flex flex-wrap items-center gap-2">
-                    <input type="hidden" name="projectId" value={project.id} />
-                    <input
-                      id={`confirm-delete-archived-${project.id}`}
-                      name="confirmName"
-                      aria-label={`Type ${project.name} to confirm deleting it`}
-                      placeholder={`Type ${project.name}`}
-                      autoComplete="off"
-                      required
-                      className="rounded-xl border border-zk-border px-2 py-1 text-sm text-zk-text"
-                    />
-                    <Button type="submit" variant="danger-secondary">
-                      Delete {project.name}
-                    </Button>
-                  </form>
-                </div>
+                <Link href={settingsHref(project.slug)} className="text-xs font-semibold text-zk-accent hover:underline">
+                  Settings
+                </Link>
+                <form action={setProjectArchivedAction}>
+                  <input type="hidden" name="projectId" value={project.id} />
+                  <input type="hidden" name="archived" value="false" />
+                  <Button type="submit" variant="secondary">
+                    Restore
+                  </Button>
+                </form>
               </li>
             ))}
           </ul>

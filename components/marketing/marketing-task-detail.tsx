@@ -21,7 +21,7 @@ export type MarketingTaskDetailProps = {
     revisionCount: number;
     createdAt: Date | string;
     type?: { id: string; name: string } | null;
-    reporter?: { name: string | null; email?: string | null } | null;
+    reporter?: { name: string | null } | null;
     createdByAgent?: { id: string; name: string } | null;
     project: { slug: ProjectRef; name?: string; goal?: string | null; siteUrl?: string | null };
     idea?: { id: string; number: number; rationale?: string | null } | null;

@@ -1,4 +1,3 @@
-import { SavedIssueViews } from "@/components/saved-issue-views";
 import { IssuePriorityBadge } from "@/components/issue-priority-badge";
 import { PRODUCT_TRACK } from "@/lib/marketing/track";
 import { IdeasWelcome } from "@/components/ideas-welcome";
@@ -26,15 +25,16 @@ import { StatusFilterChips } from "@/components/status-filter-chips";
 import { ToolbarFilterMenu, type ToolbarFilterGroup, type ToolbarFilterOption } from "@/components/toolbar-filter-menu";
 import { IdeasMoreFilters } from "@/components/ideas-more-filters";
 import { IDEA_AUTHOR_PARAM, parseIdeaAuthorFilter } from "@/lib/idea-filters";
-import { MY_WORK_PARAM, TRACK_PARAM, myWorkWhere, parseMyWorkFilter, parseTrackFilter, trackWhere, yourWorkWhere } from "@/lib/my-work-filter";
+import { MY_WORK_PARAM, TRACK_PARAM, myWorkWhere, parseMyWorkFilter, parseTrackFilter, trackWhere, yourOpenBidsWhere, yourWorkWhere } from "@/lib/my-work-filter";
+import { ProjectWeekPanel } from "@/components/project-week-panel";
+import { startOfWeek, weeklyDeliveries, type WeekPerson } from "@/lib/project-week";
 import { WORK_TAG_TONE, whatsNext } from "@/lib/whats-next";
 import { IDEA_SORT_COOKIE, ISSUE_SORT_COOKIE, getIdeaOrderBy, parseIdeaSort } from "@/lib/list-sort";
 import { SortHeader } from "@/components/sort-header";
 import { PROJECT_LINKS_SLOT_ID, ProjectIconLinks, ProjectLinks } from "@/components/project-links";
-import { AgentSetupNotice, type UnconfiguredAgent } from "@/components/agent-setup-notice";
 import { OrganisationNextStepCard } from "@/components/organisation-next-step-card";
 import { NEXT_STEP_COOKIE, organisationNextStep, type OrganisationNextStep } from "@/lib/organisation-next-step";
-import { missingProfileFields } from "@/lib/agents/work-gate";
+import { missingProfileFields, type ProfileField } from "@/lib/agents/work-gate";
 import { isAdminOfOrganisation } from "@/lib/agents/membership";
 import type { AppRole } from "@/lib/roles";
 import { IssueFilters } from "@/components/issue-filters";
@@ -114,6 +114,7 @@ import { PROJECT_ALL_PARAM, showsAllProjects } from "@/lib/issue-list-filters";
 import { ideaVoteTotals, NO_VOTES } from "@/lib/idea-vote-totals";
 import { bugSearchSort, ideaSearchSort, searchWorkItems, typesenseFilter } from "@/lib/search-index";
 import { activeIn } from "@/lib/agents/active-in";
+import { judgementBars } from "@/lib/agent-api/tested-status";
 
 /* Distinct browser-tab title; the root layout appends the site name. */
 export const metadata = { title: "Issues" };
@@ -128,6 +129,9 @@ const REJECTED_IDEAS_STATUS = "rejected_ideas";
 /** The filters under the Ideas tab: new ideas (no `?ideas=`), or `?ideas=drafts`. */
 const IDEAS_PARAM = "ideas";
 type IdeasView = "new" | "drafts" | "rejected";
+
+/** One of your agents that can't work until its profile is set up (#agent-work-gate). */
+type UnconfiguredAgent = { id: string; name: string; username: string; missing: ProfileField[] };
 /** Most ideas a list shows, highest score first. */
 
 /** `?status=rejected`: someone's confirmation entry rejected the issue (#1122, #issue-confirmations). */
@@ -138,6 +142,8 @@ const ERROR_STATUS = "error";
 const YOUR_CALL_STATUS = "your_call";
 /** Your Work: the issues assigned to you (a claim held or offered for you), a stage of its own shown only while there are any. */
 const YOUR_WORK_STATUS = "your_work";
+/** Project Overview's list tab: Delivered Work (the default) or `mine`, My Work. */
+const OVERVIEW_TAB_PARAM = "view";
 /** Open issues that may already be done (#possibly-delivered): a manager's list to check and close. */
 const POSSIBLY_DELIVERED = POSSIBLY_DELIVERED_STATUS;
 const REJECTED_WHERE = { some: { verdict: "reject", undoneAt: null } } satisfies Prisma.IssueConfirmationListRelationFilter;
@@ -153,12 +159,12 @@ const ALL_FILTERS = [ALL_STATUS, REJECTED_STATUS, DUPLICATE_STATUS].map((value) 
  * left of the panel when it is picked. Ideas (the Idea table) comes first.
  */
 const STAGE_GROUPS = [
-  // Your Work comes first and Live last; each shows only while it has issues.
-  { label: "Your Work", statuses: [YOUR_WORK_STATUS] },
+  // Project Overview comes first (who delivered this week, then your work in the project) and Live last, which shows only once something went live.
+  { label: "Overview", statuses: [YOUR_WORK_STATUS] },
   // Ideas holds only ideas. The rest are main statuses (#substatus): each tab
   // lists every substatus of its status together (Open: Requires confirmation
   // and Open), and each row says which one it is at.
-  { label: "Ideas", statuses: [IDEAS_STATUS, REJECTED_IDEAS_STATUS] },
+  { label: "New", statuses: [IDEAS_STATUS, REJECTED_IDEAS_STATUS] },
   { label: "In Progress", statuses: ["open", "in_progress", "closed", POSSIBLY_DELIVERED] },
   { label: "Delivered", statuses: ["done", "merge", ERROR_STATUS] },
   { label: "Live", statuses: ["resolved"] },
@@ -389,11 +395,19 @@ export async function IssuesList({
     const and = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
     where.AND = [...and, myWorkWhere(userId)];
   }
-  // Your Work: the issues assigned to you, whatever their status.
+  // Project Overview (#project-overview): two lists under the contributors, as tabs. Delivered Work (the default):
+  // the project's tickets delivered this week, by anyone. My Work: what you hold.
   const isYourWorkView = statusParam === YOUR_WORK_STATUS && !isDeletedView;
+  const overviewTab: "delivered" | "mine" = toSingleQueryParam(params[OVERVIEW_TAB_PARAM]) === "mine" ? "mine" : "delivered";
+  const isMyWorkTab = isYourWorkView && overviewTab === "mine";
   if (isYourWorkView) {
     const and = Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : [];
-    where.AND = [...and, userId ? yourWorkWhere(userId) : { id: { in: [] } }];
+    where.AND = [
+      ...and,
+      isMyWorkTab
+        ? userId ? yourWorkWhere(userId) : { id: { in: [] } }
+        : { deliveries: { some: { createdAt: { gte: startOfWeek() } } } },
+    ];
   }
   if (qParam?.trim()) {
     const q = escapeSearchQuery(boundSearchTerm(qParam));
@@ -648,7 +662,7 @@ export async function IssuesList({
   // #live-confirm: what each agent found, for the Live rows on this page, shown when a row is opened.
   const liveConfirmations = await loadOrEmpty("live confirmations", () => loadProdConfirmations(bugs.filter((bug) => liveChecks.has(bug.id)).map((bug) => bug.id)), new Map<string, ProdConfirmation[]>());
   // Your Work: which rows are there because of your bid, for each row's tag.
-  const myBidIds = isYourWorkView && userId && bugs.length
+  const myBidIds = isMyWorkTab && userId && bugs.length
     ? new Set(
         (await loadOrEmpty("your bids", () => prisma.issueBid.findMany({
           where: { beneficiaryUserId: userId, withdrawnAt: null, bugId: { in: bugs.map((b) => b.id) } },
@@ -687,7 +701,8 @@ export async function IssuesList({
     loadOrEmpty("project links", () => prisma.project.findUnique({ where: { id: project.id }, select: { siteUrl: true, repoUrl: true } }), null),
     organisationId && userId ? loadOrEmpty("project admin", () => isAdminOfOrganisation(user, organisationId), false) : Promise.resolve(false),
   ]);
-  // #agent-work-gate: your agents that aren't allowed to work until their profile is set up.
+  // #agent-work-gate: your agents that aren't allowed to work until their profile is set up. The agents bar
+  // marks each one "Set up"; here they only hold back the next-step card and the ideas page's opening question.
   const unconfiguredAgents: UnconfiguredAgent[] =
     organisationId && userId
       ? await loadOrEmpty(
@@ -711,7 +726,7 @@ export async function IssuesList({
         )
       : [];
   // The next-step card (#agents-dock) where the empty agents bar used to be: the one next thing for you, from your role and what the
-  // organisation has. Never beside AgentSetupNotice, and dismissable per organisation.
+  // organisation has. Not while one of your agents is blocked (the agents bar says so), and dismissable per organisation.
   let nextStep: OrganisationNextStep | null = null;
   if (organisationId && userId && membershipRole && !isDeletedView) {
     const dismissed = parseDismissed((await cookies()).get(NEXT_STEP_COOKIE)?.value).includes(organisationId);
@@ -766,6 +781,15 @@ export async function IssuesList({
           0,
         )
       : 0;
+  // Project Overview (#project-overview): who delivered what this week, and your open bids, counted, not listed.
+  const [weekPeople, openBidCount] = isYourWorkView && organisationId
+    ? await Promise.all([
+        loadOrEmpty("week deliveries", () => weeklyDeliveries(organisationId, project.id), [] as WeekPerson[]),
+        userId
+          ? loadOrEmpty("open bids", () => prisma.bug.count({ where: { ...bugInOrganisation(organisationId), projectId: project.id, isDeleted: false, ...yourOpenBidsWhere(userId) } }), 0)
+          : Promise.resolve(0),
+      ])
+    : [[] as WeekPerson[], 0];
   // The Ideas tab's counts show on every tab; drafts only while Ideas is open.
   const [ideasCount, rejectedIdeasCount, draftIds] = await Promise.all([
     organisationId && !isDeletedView ? loadOrEmpty("ideas tab", () => prisma.idea.count({ where: ideaWhere }), 0) : 0,
@@ -902,6 +926,8 @@ export async function IssuesList({
   const snippets = new Map<string, Snippet>();
   // Possibly delivered: why each issue is on the list, and why it is still Open.
   const signals = statusParam === POSSIBLY_DELIVERED ? await loadOrEmpty("delivery signals", () => deliverySignals(prisma, bugs.map((b) => b.id)), new Map()) : new Map<string, DeliverySignals>();
+  // #deeper-testing: each row being judged shows its tests at a glance, counted as the gate counts them.
+  const testBars = await loadOrEmpty("tests bars", () => judgementBars(prisma, bugs.filter((b) => b.status === "done").map((b) => b.id)), new Map<string, { good: number; needed: number }>());
   if (searchText) {
     const needDescription = bugs
       .filter((bug) => !hasMatch(bug.title, searchText))
@@ -1076,22 +1102,6 @@ export async function IssuesList({
     value === YOUR_WORK_STATUS ? yourWorkCount : value === IDEAS_STATUS ? ideasCount : value === REJECTED_IDEAS_STATUS ? rejectedIdeasCount : value === ERROR_STATUS ? errorCount : value === POSSIBLY_DELIVERED ? possiblyDeliveredCount : countForStatus(value);
   const statusLink = (value: string) => (value === IDEAS_STATUS ? statusHref(null) : statusHref(value));
 
-  let savedViews: { id: string; name: string; status: string; query: string }[] = [];
-  let savedViewsFailed = false;
-  if (!isIdeasView) {
-    try {
-      savedViews = await prisma.savedIssueView.findMany({
-        where: { userId: user.id, projectId: project.id },
-        select: { id: true, name: true, status: true, query: true },
-        orderBy: [{ name: "asc" }, { id: "asc" }],
-      });
-    } catch {
-      savedViewsFailed = true;
-    }
-  }
-  const savedViewQuery = new URLSearchParams(currentQuery);
-  savedViewQuery.set("sort", currentSort);
-
   const headerContent = (
     <>
       {activeProject?.goal ? (
@@ -1113,7 +1123,7 @@ export async function IssuesList({
           {isDeletedView || allProjects || !isFirstRun ? (
             <div className="flex flex-wrap items-center gap-2">
               {/* Desktop: Add Idea at the far left of the toolbar. */}
-              {!isDeletedView && !isFirstRun ? <IdeaChat projectId={project.id} types={tagTypes} className="max-md:hidden" /> : null}
+              {!isDeletedView && !isFirstRun ? <IdeaChat projectId={project.id} className="max-md:hidden" /> : null}
               {isDeletedView ? (
                 <span className="rounded-md bg-zk-bad-bg px-2 py-0.5 text-[11px] font-bold text-zk-bad-fg">Admin view</span>
               ) : null}
@@ -1123,26 +1133,23 @@ export async function IssuesList({
             </div>
           ) : null}
         </div>
-        <Suspense fallback={<div className="h-8 w-36 rounded-lg bg-zk-chip" />}>
+        {/* Project Overview has no filters. */}
+        {isYourWorkView ? null : <Suspense fallback={<div className="h-8 w-36 rounded-lg bg-zk-chip" />}>
           <IssueFilters compact tagTypes={tagTypes} milestones={milestones} areas={areas} shortcutsEnabled={shortcutsEnabled}
             stageCounts={isDeletedView ? undefined : { confirming: confirmingCount, ready: readyCount }} />
-        </Suspense>
+        </Suspense>}
         <div className="issues-actions flex flex-wrap items-center gap-2 print:hidden">
           {/* The issue tabs' filter, beside the search: a standard Filter button and menu. */}
-          {!isIdeasView && filterGroups.length > 0 ? <ToolbarFilterMenu groups={filterGroups} summary={filterSummary} /> : null}
+          {!isIdeasView && !isYourWorkView && filterGroups.length > 0 ? <ToolbarFilterMenu groups={filterGroups} summary={filterSummary} /> : null}
           {finishedWatched > 0 ? <UnwatchFinishedButton count={finishedWatched} /> : null}
           <IssuesToolsToggle
             active={Boolean(searchText || selectedTags.length > 0 || selectedMilestone)}
           />
           {/* Phones: the + beside the title, since the tools row is collapsed there.
               Desktop has it at the far left of the toolbar, except on a first run. */}
-          {!isDeletedView ? <IdeaChat projectId={project.id} types={tagTypes} className={isFirstRun ? "" : "md:hidden"} /> : null}
+          {!isDeletedView ? <IdeaChat projectId={project.id} className={isFirstRun ? "" : "md:hidden"} /> : null}
         </div>
       </div>
-      {!isIdeasView ? (
-        <SavedIssueViews org={project.orgSlug} slug={project.slug} status={statusParam}
-          query={savedViewQuery.toString()} views={savedViews} loadFailed={savedViewsFailed} />
-      ) : null}
     </>
   );
 
@@ -1167,8 +1174,29 @@ export async function IssuesList({
         {/* Earnings (#earnings): the way to earn, on the page everyone lands on, closed with × like the panel above. */}
         {isIdeasView && !isDeletedView && earnProject ? <EarnPanel project={earnProject} line={earnBannerLine(earnProject)} /> : null}
 
-        <AgentSetupNotice agents={unconfiguredAgents} />
         {nextStep && organisationId ? <OrganisationNextStepCard step={nextStep} organisationId={organisationId} /> : null}
+
+        {/* Project Overview: who delivered what this week first, then the work you hold, then your open bids,
+            only counted, under the list. Goals are in the project's settings. */}
+        {isYourWorkView && organisationId ? <ProjectWeekPanel people={weekPeople} viewerId={userId ?? null} /> : null}
+
+        {/* Project Overview's two lists, as tabs: the week's delivered work first, then yours. */}
+        {isYourWorkView ? (
+          <nav aria-label="Overview lists" className="flex gap-1 border-b border-zk-divider">
+            {([["delivered", "Delivered Work"], ["mine", "My Work"]] as const).map(([tab, label]) => (
+              <Link
+                key={tab}
+                href={listHref(new URLSearchParams({ status: YOUR_WORK_STATUS, ...(tab === "mine" ? { [OVERVIEW_TAB_PARAM]: "mine" } : {}) }))}
+                aria-current={overviewTab === tab ? "page" : undefined}
+                className={`-mb-px border-b-2 px-3 pb-2.5 pt-1 text-sm font-semibold transition ${
+                  overviewTab === tab ? "border-electric-blue-strong text-zk-text" : "border-transparent text-zk-muted hover:text-zk-text"
+                }`}
+              >
+                {label}
+              </Link>
+            ))}
+          </nav>
+        ) : null}
 
         {milestoneSummary ? (
           <section aria-label={`Milestone ${milestoneSummary.title}`} className="rounded-[20px] border border-zk-border bg-zk-surface p-5">
@@ -1280,11 +1308,11 @@ export async function IssuesList({
                     <SortHeader label="Reward" current={currentSort} first="reward" second="reward_low" cookie={ISSUE_SORT_COOKIE} />
                   </span>
                   {/* Your Work: who it's for, between the reward and the issue. */}
-                  {isYourWorkView ? <span className="hidden w-10 shrink-0 lg:block" aria-hidden="true" /> : null}
+                  {isMyWorkTab ? <span className="hidden w-10 shrink-0 lg:block" aria-hidden="true" /> : null}
                   <span className="min-w-0 flex-1">
                     <SortHeader label="Issue" current={currentSort} first="title" second="title_desc" firstDescending={false} cookie={ISSUE_SORT_COOKIE} />
                   </span>
-                  {isYourWorkView ? (
+                  {isMyWorkTab ? (
                     // Your Work: who it's for sits beside the issue, then what happens next. No bids or importance.
                     <>
                       <span className="hidden w-[260px] shrink-0 md:block">What&apos;s next?</span>
@@ -1311,7 +1339,7 @@ export async function IssuesList({
                     // Someone is on it: an active claim, or the issue was moved to in progress.
                     // On Your Work it is you, shown once in its own column, and What's next says the deadline:
                     // the row shows the plain status instead of who is on it.
-                    const work = !isYourWorkView && (claim || bug.status === "in_progress")
+                    const work = !isMyWorkTab && (claim || bug.status === "in_progress")
                       ? { person: claim?.beneficiary?.name ?? bug.assignee?.name ?? null, since: claim ? (claim.claimedAt ?? claim.createdAt) : null }
                       : null;
                     // Importance in a list is a number to read, not a button: it is marked on the issue's page.
@@ -1319,7 +1347,7 @@ export async function IssuesList({
                     const hasBids = bug.substatus === "open" && bug._count.bids > 0;
                     const importance = <ImportanceVoteBadge bugId={bug.id} count={bug.voteCount} highlighted={hasBids} votable={false} />;
                     // Your Work: which kind of your work this is, and the next step (lib/whats-next.ts).
-                    const next = isYourWorkView
+                    const next = isMyWorkTab
                       ? whatsNext(bug.substatus, (bug.claims ?? []).filter((c) => c.beneficiaryUserId === userId), myBidIds.has(bug.id))
                       : null;
                     // #live-check: a Live row says where its fix really is, as its issue page does.
@@ -1328,8 +1356,8 @@ export async function IssuesList({
                       <IssueRowStatus substatus={bug.substatus} stage={stage} botConfirmations={confirmationCounts.get(bug.id) ?? 0} work={work}
                         closeReason={bug.closeReason}
                         confirmed={confirmationStates.get(bug.id)?.confirmed ?? false}
-                        bids={bug.substatus === "open" ? bug._count.bids : undefined}
-                        offeredTo={bug.substatus === "open" && offer ? (offer.beneficiary?.name ?? "someone") : null}
+                        bids={bug.substatus === "open" || bug.substatus === "merged_broken" ? bug._count.bids : undefined}
+                        offeredTo={(bug.substatus === "open" || bug.substatus === "merged_broken") && offer ? (offer.beneficiary?.name ?? "someone") : null}
                         planReviewFor={bug.substatus === "plan_review" ? (planning?.beneficiary?.name ?? null) : null}
                         mergePath={bug.status === "resolved" && bug.pullRequestUrl ? mergePathOf(bug) : null} />
                     );
@@ -1352,7 +1380,7 @@ export async function IssuesList({
                         <div className="issues-vote w-[76px] shrink-0">
                           <RewardBadge reward={Number(bug.reward)} estimates={bug.rewardEstimateCount} fixed={Boolean(bug.rewardFixedAt)} />
                         </div>
-                        {isYourWorkView ? (
+                        {isMyWorkTab ? (
                           <span className="hidden w-10 shrink-0 items-center lg:flex">
                             {bug.assignee ? <RowAssignee name={bug.assignee.name} image={bug.assignee.image} /> : null}
                           </span>
@@ -1414,11 +1442,12 @@ export async function IssuesList({
                             </span>
                             {snippets.has(bug.id) ? <SearchSnippet snippet={snippets.get(bug.id)!} /> : null}
                             {signals.has(bug.id) ? <DeliverySignalsLine signals={signals.get(bug.id)!} /> : null}
+                            {testBars.has(bug.id) ? <TestsBar {...testBars.get(bug.id)!} /> : null}
                           </span>
                         </Link>
                         {/* #live-confirm: opens who found it on prod, under the row (a button can't sit in the link). */}
                         {liveFix ? <RowToggle label="Show who found it on prod" /> : null}
-                        {isYourWorkView ? (
+                        {isMyWorkTab ? (
                           (() => {
                             if (!next) return null;
                             return (
@@ -1469,7 +1498,7 @@ export async function IssuesList({
             </div>
 
             <PaginationControls
-              basePath={listHref(new URLSearchParams(statusParam ? { status: statusParam } : {}))}
+              basePath={listHref(new URLSearchParams({ ...(statusParam ? { status: statusParam } : {}), ...(isMyWorkTab ? { [OVERVIEW_TAB_PARAM]: "mine" } : {}) }))}
               page={pagination.page}
               totalPages={pagination.totalPages}
               totalCount={totalCount}
@@ -1492,6 +1521,25 @@ export async function IssuesList({
             />
           </section>
         )}
+
+        {/* Project Overview: your open bids are counted, not listed, under the work you hold. */}
+        {isMyWorkTab && openBidCount > 0 ? (
+          <Link
+            href={issuesPath(ref, "open", `${MY_WORK_PARAM}=1`)}
+            className="group flex items-center gap-4 rounded-[20px] border border-zk-border bg-zk-surface px-5 py-4 transition hover:border-zk-accent/40 hover:bg-zk-tint/40 focus-visible:outline-2 focus-visible:outline-electric-blue"
+          >
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-zk-tint text-lg font-extrabold tabular-nums text-zk-accent">
+              {openBidCount}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-bold text-zk-text">Open {openBidCount === 1 ? "bid" : "bids"} waiting for an award</span>
+              <span className="block text-xs text-zk-muted">Issues you or your agents bid on that nobody has been awarded yet.</span>
+            </span>
+            <span className="shrink-0 text-xs font-semibold text-zk-accent group-hover:underline">
+              See them <span aria-hidden="true">→</span>
+            </span>
+          </Link>
+        ) : null}
       </div>
   );
 
@@ -1515,8 +1563,9 @@ export async function IssuesList({
               href: statusLink(group.statuses[0]),
               selected: index === stageIndex,
             };
-            // Your Work only while something is assigned to you, Live only once something went live.
-            const conditional = index === YOUR_WORK_STAGE || index === LIVE_STAGE;
+            // Project Overview always for people who can contribute, else only while something is assigned to you;
+            // Live only once something went live.
+            const conditional = (index === YOUR_WORK_STAGE && !canContribute) || index === LIVE_STAGE;
             return !conditional || stage.count > 0 || stage.selected ? [stage] : [];
           })}
         />
@@ -1533,10 +1582,9 @@ export async function IssuesList({
             askOnLoad={isIdeasView && unconfiguredAgents.length === 0}
           />
         ) : null}
-        {/* Goals, project notes and settings, as icons, beside the tabs. */}
+        {/* Project notes and settings, as icons, beside the tabs. */}
         {!isDeletedView ? (
           <ProjectIconLinks
-            goalsHref={canContribute ? projectPath(ref, "/goals") : undefined}
             notesHref={canContribute ? projectPath(ref, "/notes") : undefined}
             settingsHref={isOrgAdmin ? `/projects/${encodeURIComponent(slug)}/settings` : undefined}
           />
@@ -1655,6 +1703,32 @@ function DeliverySignalsLine({ signals }: { signals: DeliverySignals }) {
       {signals.lastActivityAt ? (
         <span className="text-zk-muted">Last activity <LocalTime date={signals.lastActivityAt} /></span>
       ) : null}
+    </span>
+  );
+}
+
+/**
+ * The tests at a glance (#deeper-testing): a checked clipboard, then one slot per
+ * judgement needed, green for each that counts and red for each still missing.
+ * An approved exception to "no per-stage tally under a row" (AGENTS.md).
+ */
+function TestsBar({ good, needed }: { good: number; needed: number }) {
+  const label = `Tests: ${Math.min(good, needed)} of ${needed} passed`;
+  return (
+    <span role="img" aria-label={label} title={label} className="mt-1 flex items-center gap-2">
+      <svg viewBox="0 0 24 24" className={`h-4 w-4 ${good >= needed ? "text-zk-ok-fg" : "text-zk-text2"}`} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <rect x="8" y="2" width="8" height="4" rx="1" />
+        <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+        <path d="m9 14 2 2 4-4" />
+      </svg>
+      <span className="flex gap-1">
+        {Array.from({ length: needed }, (_, i) => (
+          <span key={i} aria-hidden="true" className={`h-2.5 w-7 rounded-full ${i < good ? "bg-zk-ok-fg" : "bg-zk-bad-fg"}`} />
+        ))}
+      </span>
+      <span className={`text-xs font-bold tabular-nums ${good >= needed ? "text-zk-ok-fg" : "text-zk-bad-fg"}`}>
+        {Math.min(good, needed)}/{needed}
+      </span>
     </span>
   );
 }

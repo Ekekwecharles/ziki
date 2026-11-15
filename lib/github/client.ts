@@ -79,6 +79,36 @@ async function installationToken(installationId: string): Promise<string | null>
   return body.token;
 }
 
+const repoInstallations = new Map<string, { id: string | null; at: number }>();
+const REPO_INSTALLATION_TTL_MS = 10 * 60_000;
+
+/**
+ * The installation of Ziki's GitHub App that covers `owner/repo`, asked of
+ * GitHub as the app itself, or null when the app isn't set up or isn't
+ * installed there. Used for Ziki's own repositories, such as the preview
+ * builder, so no installation ID has to be configured.
+ */
+export async function installationIdForRepo(owner: string, repo: string): Promise<string | null> {
+  const credentials = appCredentials();
+  if (!credentials) return null;
+  const key = `${owner}/${repo}`.toLowerCase();
+  const cached = repoInstallations.get(key);
+  if (cached && Date.now() - cached.at < REPO_INSTALLATION_TTL_MS) return cached.id;
+  const response = await fetchWithTimeout(`${githubApiUrl()}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/installation`, {
+    method: "GET",
+    headers: baseHeaders(appJwt(credentials.appId, credentials.privateKey)),
+  });
+  if (response.status === 404) {
+    repoInstallations.set(key, { id: null, at: Date.now() });
+    return null;
+  }
+  if (!response.ok) throw await errorFrom(response);
+  const body = (await response.json()) as { id: number };
+  const id = String(body.id);
+  repoInstallations.set(key, { id, at: Date.now() });
+  return id;
+}
+
 /** How Ziki talks to GitHub for a project. */
 export async function githubAuthFor(project: { githubInstallationId: string | null }): Promise<GitHubAuth> {
   if (project.githubInstallationId) {

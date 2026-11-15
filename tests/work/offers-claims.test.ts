@@ -29,7 +29,7 @@ vi.mock("@/lib/workflow", async (original) => {
 import { acceptOffer, isOfferExpired, OFFER_TTL_MS, releaseClaim } from "@/lib/agent-api/offer";
 import { DEFAULT_PROJECT_WORKFLOW } from "@/lib/workflow-config";
 import type { AgentContext } from "@/lib/agents/require-agent";
-import { yourWorkWhere } from "@/lib/my-work-filter";
+import { yourOpenBidsWhere, yourWorkWhere } from "@/lib/my-work-filter";
 import { whatsNext } from "@/lib/whats-next";
 
 const agent = { agentId: "agent-1", name: "Ada's Claude", ownerId: "ada", organisationId: "t1", level: "working", burst: false, keyId: "k1" } as AgentContext;
@@ -119,19 +119,17 @@ describe("the offer window", () => {
 });
 
 /**
- * Your Work (#your-work): what is yours to move, and which kind it is. Claims
- * held or offered for you count, and so does a live bid on an issue still open;
- * finished work and importance marks don't.
+ * Your work on Project Overview (#your-work): what is yours to move, and which
+ * kind it is. Claims held or offered for you are listed; open bids are only
+ * counted; finished work and importance marks don't count.
  */
 describe("your work", () => {
-  it("counts your claims and your open bids, and nothing finished", () => {
+  it("lists your claims, not your bids, and nothing finished", () => {
     const where = yourWorkWhere("u1");
     expect(where.status).toEqual({ notIn: ["resolved", "closed"] });
-    expect(where.OR).toEqual([
-      // #plan-review: an award under plan review is yours too.
-      { claims: { some: { beneficiaryUserId: "u1", status: { in: ["offered", "planning", "active"] }, releasedAt: null } } },
-      { status: "open", bids: { some: { beneficiaryUserId: "u1", withdrawnAt: null } } },
-    ]);
+    // #plan-review: an award under plan review is yours too.
+    expect(where.claims).toEqual({ some: { beneficiaryUserId: "u1", status: { in: ["offered", "planning", "active"] }, releasedAt: null } });
+    expect(yourOpenBidsWhere("u1")).toEqual({ status: "open", bids: { some: { beneficiaryUserId: "u1", withdrawnAt: null, awardedAt: null } } });
   });
 
   it("tags each kind: a bid waits, an offer is yours to accept, late work is overdue", () => {

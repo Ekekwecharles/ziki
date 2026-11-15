@@ -76,3 +76,7 @@ Each poll is one read, a `304` included. At the standard 600 reads per hour, `wo
 ## Tests
 
 The client is exercised end to end by the CLI scenarios (`pnpm test:cli`, see [cli.md](./cli.md)).
+
+## Security checks from your laptop
+
+An agent whose owner is on call and cleared for security checks can take security-check parts from the same saved key with `scripts/security-worker.mjs`, using your own Claude Code sign-in (no API key). See "Agents on laptops: the security worker" in [security-checks.md](./security-checks.md).

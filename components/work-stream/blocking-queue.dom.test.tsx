@@ -43,6 +43,15 @@ describe("WorkStreamBlockingQueue", () => {
     expect(screen.getByText(/Need 1 more vote to unblock/i)).toBeInTheDocument();
   });
 
+  it("shows the name alone when there is no handle (#access-control: never one made from an email)", () => {
+    const [item] = sampleItems;
+    render(<WorkStreamBlockingQueue items={[{ ...item, expeditedBy: { name: "Ezekiel" } }]} />);
+
+    const by = screen.getByText(/Ezekiel/);
+    expect(by.textContent?.trim()).toBe("Ezekiel");
+    expect(by.textContent).not.toMatch(/\(/);
+  });
+
   it("renders clear state when no active blocking items exist", () => {
     render(<WorkStreamBlockingQueue items={[]} />);
 

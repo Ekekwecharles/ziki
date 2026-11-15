@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { joinOpenProjectAction } from "@/app/actions/project-join-requests";
+import { ProjectJoinRequestButton } from "@/components/project-join-request-button";
 import { projectPath, projectRef } from "@/lib/project-paths";
 import { publicReportPath } from "@/lib/public-project-paths";
 
@@ -149,13 +150,11 @@ export function DiscoverProjectCard({ project }: { project: DiscoverableProject 
                   </Button>
                 </Link>
               ) : (
-                <Button
-                  variant="secondary"
-                  disabled
-                  className="text-xs font-medium opacity-60"
-                >
-                  Not open for now
-                </Button>
+                <Link href={`/login?callbackUrl=${encodeURIComponent("/discover")}`}>
+                  <Button variant="secondary" className="text-xs font-semibold">
+                    Sign in to ask to join
+                  </Button>
+                </Link>
               )
             ) : currentStatus === "member" ? (
               <Link href={projectPath(projectRef(project.organisation.slug, project.slug))}>
@@ -163,11 +162,8 @@ export function DiscoverProjectCard({ project }: { project: DiscoverableProject 
                   Open Project →
                 </Button>
               </Link>
-            ) : currentStatus === "rejected" ? (
-              <Button variant="secondary" disabled className="text-xs font-medium opacity-60">
-                Request declined
-              </Button>
             ) : project.isOpenForContributors ? (
+              // Open means anyone may join, so an earlier declined request no longer stands in the way.
               <div className="flex flex-col items-end gap-1">
                 <Button variant="primary" onClick={join} disabled={joining} className="text-xs font-bold">
                   {joining ? "Joining…" : "Join"}
@@ -175,13 +171,7 @@ export function DiscoverProjectCard({ project }: { project: DiscoverableProject 
                 {joinError ? <p role="alert" className="text-xs text-zk-bad-fg">{joinError}</p> : null}
               </div>
             ) : (
-              <Button
-                variant="secondary"
-                disabled
-                className="text-xs font-medium opacity-60"
-              >
-                Not open for now
-              </Button>
+              <ProjectJoinRequestButton project={project} state={currentStatus} />
             )}
           </div>
         </div>

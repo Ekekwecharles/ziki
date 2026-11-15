@@ -9,6 +9,8 @@ import {
 
 const loadDashboard = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/security-dashboard", () => ({ loadSecurityDashboard: loadDashboard }));
+// The page reads the session to tell a signed-in person from a visitor (the public page); the real auth cannot load here.
+vi.mock("@/auth", () => ({ auth: vi.fn(async () => ({ user: { id: "user_test" } })) }));
 vi.mock("@/lib/auth-helpers", () => ({
   requireUser: vi.fn(async () => ({ id: "member-1", role: "user" })),
 }));

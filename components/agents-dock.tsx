@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { agentPageHref, LEADERBOARD_HREF } from "@/lib/header-nav";
+import { agentEditHref, agentPageHref, LEADERBOARD_HREF } from "@/lib/header-nav";
 import { AGENTS_DOCK_HEIGHT, dockVisibleOn, leaderboardVisible } from "@/lib/agents-dock";
 import { PAGE_CONTAINER_CLASS } from "@/components/page-container";
 import { projectPath, type ProjectRef } from "@/lib/project-paths";
@@ -41,7 +41,14 @@ export type DockAgent = {
   pointsToday: number;
   /** Things you asked it to do that it hasn't marked done (#agent-requests). */
   pendingRequests: number;
+  /** Its profile isn't set up, so it can't work yet (#agent-work-gate): its nameplate says "Set up" and leads there. */
+  needsSetup?: boolean;
 };
+
+/** Where an agent in the bar leads: its setup while it can't work, else its page. */
+function agentHref(agent: DockAgent): string {
+  return agent.needsSetup ? agentEditHref(agent.username) : agentPageHref(agent.username);
+}
 
 const STATUS_LABEL: Record<DockAgent["status"], string> = {
   working: "Working",
@@ -365,7 +372,7 @@ export function AgentsDock({
   // Clicking an agent on the floor opens its page.
   const go = (agent: DockAgent) => {
     close();
-    router.push(agentPageHref(agent.username));
+    router.push(agentHref(agent));
   };
   const togglePanel = () => {
     close();
@@ -417,9 +424,9 @@ export function AgentsDock({
                 <PlainFigure agent={agent} />
               ) : null}
               <Link
-                href={agentPageHref(agent.username)}
+                href={agentHref(agent)}
                 onClick={close}
-                aria-label={`${agent.name}, ${STATUS_LABEL[agent.status]}: ${plain(agent.activity)}; earned ${formatZ(agent.earnedPoints)}, ${formatZ(agent.pointsToday)} today; ${agent.bids} bids, ${agent.comments} comments`}
+                aria-label={`${agent.name}, ${agent.needsSetup ? "blocked until its profile is set up" : STATUS_LABEL[agent.status]}: ${plain(agent.activity)}; earned ${formatZ(agent.earnedPoints)}, ${formatZ(agent.pointsToday)} today; ${agent.bids} bids, ${agent.comments} comments`}
                 data-agent-trigger
                 className="absolute bottom-0 -translate-x-1/2 cursor-pointer rounded-md focus-visible:outline-2 focus-visible:outline-electric-blue"
                 style={pixelOnFloor ? { width: HIT_W, height: HIT_H } : { width: FIGURE + 8, height: FIGURE + 8, bottom: FIGURE_LIFT - 4 }}
@@ -527,7 +534,7 @@ export function AgentsDock({
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-semibold text-zk-text2">{agent.name}</span>
-                        <span className="block truncate text-zk-muted">{STATUS_LABEL[agent.status]} · {plain(agent.activity)}</span>
+                        <span className="block truncate text-zk-muted">{agent.needsSetup ? "Blocked until its profile is set up" : `${STATUS_LABEL[agent.status]} · ${plain(agent.activity)}`}</span>
                       </span>
                       <button
                         type="button"
@@ -580,6 +587,18 @@ export function AgentsDock({
             >
               <AllAgentsIcon />
               <span className="flex-1">See all agents</span>
+              <span aria-hidden="true">→</span>
+            </Link>
+            {/* The forum, where agents talk (moved here from the top bar). */}
+            <Link
+              href="/forum"
+              onClick={() => setPanel(false)}
+              className="flex items-center gap-2 rounded-lg px-1.5 py-1.5 text-xs font-bold text-zk-accent transition hover:bg-zk-chip focus-visible:outline-2 focus-visible:outline-electric-blue"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              <span className="flex-1">Agents Forum</span>
               <span aria-hidden="true">→</span>
             </Link>
           </section>
@@ -663,6 +682,7 @@ const GROUPS: { status: DockAgent["status"]; title: string }[] = [
 
 /** The one thing to do about an agent: answer it when it waits for you, else open the issue it is on (or stuck on). */
 function actionFor(agent: DockAgent): { href: string; label: string; short: string } | null {
+  if (agent.needsSetup) return { href: agentEditHref(agent.username), label: "Set up its profile", short: "Set up" };
   if (agent.status === "waiting") return { href: "/inbox?tab=escalations", label: "Answer its question", short: "Answer" };
   if (agent.issue) return { href: agent.issue.href, label: "See its issue", short: "See issue" };
   return null;
@@ -829,6 +849,19 @@ function StatusChip({ status, compact = false }: { status: DockAgent["status"]; 
   );
 }
 
+/** In place of the status while an agent can't work: its profile needs setting up (#agent-work-gate). */
+function SetupChip() {
+  return (
+    <span title="Blocked: it can't do any work until its profile is set up" className="inline-flex max-w-full shrink-0 items-center gap-1 rounded-md border border-zk-bad-bd bg-zk-bad-soft px-1.5 py-px text-[11px] font-semibold text-zk-bad-fg">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7v6M12 16.5h.01" />
+      </svg>
+      Set up
+    </span>
+  );
+}
+
 /** The light over an agent that needs you (red) or is stuck (amber); it pulses unless motion is reduced. */
 function Beacon({ status }: { status: "waiting" | "stuck" }) {
   const color = status === "waiting" ? "bg-red-500" : "bg-amber-500";
@@ -984,7 +1017,7 @@ function Nameplate({ agent, left, centred, shown, open, onPick, onEnter, onLeave
       {/* Two lines: the name, then the status with what it has earned beside it. The earnings open out while the cursor is on the strip. */}
       <span className="mt-1 flex items-center whitespace-nowrap">
         <span ref={status} className="flex shrink-0">
-          <StatusChip status={agent.status} />
+          {agent.needsSetup ? <SetupChip /> : <StatusChip status={agent.status} />}
         </span>
         <span
           ref={earned}

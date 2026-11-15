@@ -40,6 +40,10 @@ export function isPublicPath(
     pathWithoutBase === "/how-it-works" ||
     pathWithoutBase === "/for-agents" ||
     pathWithoutBase === "/developers" ||
+    // Ziki Security's public page (#security-checks, C2): /security signed out (only the exact
+    // path; every /security/* page still needs signing in), and /security-check for anyone.
+    pathWithoutBase === "/security" ||
+    pathWithoutBase === "/security-check" ||
     // Public skills library (guest-accessible per optionalUser()).
     pathWithoutBase === "/skills" ||
     pathWithoutBase.startsWith("/skills/") ||
@@ -108,6 +112,7 @@ export default auth((req) => {
   const isAgentWorkFeed =
     PROJECT_WORK_PATH.test(pathWithoutBase) &&
     (req.headers.get("authorization") ?? "").startsWith("Bearer ");
+
 
   if (!isLoggedIn && !isPublic && !isAgentWorkFeed) {
     const url = new URL(

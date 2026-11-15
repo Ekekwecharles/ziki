@@ -3,7 +3,7 @@ import type { Bug, Idea } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { documentId, ensureWorkItemsCollection, epoch, getTypesenseClient, typesenseConfig, WORK_ITEMS_COLLECTION, type WorkItemDocument } from "@/lib/typesense";
 
-const SUBSTATUS_ORDER = ["requires_confirmation", "open", "in_progress", "requires_review", "accepted", "ready_to_merge", "error", "on_dev", "on_staging", "on_prod", "published", "closed"];
+const SUBSTATUS_ORDER = ["requires_confirmation", "open", "in_progress", "requires_review", "accepted", "ready_to_merge", "error", "on_dev", "on_staging", "on_prod", "published", "force_merged", "merged_broken", "closed"];
 
 export function searchOutboxPolicy(env: NodeJS.ProcessEnv = process.env) {
   const positiveInteger = (name: string, fallback: number, maximum: number) => {

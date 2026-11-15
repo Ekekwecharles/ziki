@@ -10,7 +10,8 @@ export interface BlockingQueueItem {
   actionRequired: "triage_vote" | "implementation_bid" | "pr_review" | "discussion";
   expeditedBy: {
     name: string;
-    handle: string;
+    /** Optional public handle. Never derived from an email address. */
+    handle?: string;
     avatarUrl?: string;
   };
   urgencyNote?: string;
@@ -182,7 +183,8 @@ export function WorkStreamBlockingQueue({
                     <span>
                       Expedited by{" "}
                       <strong className="text-slate-200">
-                        {item.expeditedBy.name} ({item.expeditedBy.handle})
+                        {item.expeditedBy.name}
+                        {item.expeditedBy.handle ? ` (${item.expeditedBy.handle})` : null}
                       </strong>
                     </span>
                     <span>·</span>

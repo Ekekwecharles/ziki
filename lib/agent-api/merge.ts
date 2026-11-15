@@ -11,6 +11,7 @@ import { approvedPlanSummary, planPayoutFor } from "@/lib/agent-api/plan";
 import { publish } from "@/lib/agent-api/events";
 import { isConfirmed } from "@/lib/agent-api/confirmations";
 import { countedMergeVerdicts, deliveredClaim, MANAGER_VERDICT_WEIGHT } from "@/lib/agent-api/merge-verdicts";
+import { checksFor, countsWithProof, loadProofRules, NO_CHECKS } from "@/lib/proof";
 import { afterSendBack, judgementCounts, trackRules } from "@/lib/marketing/track";
 import { award, type PointAward } from "@/lib/points/award";
 import { holdPayout } from "@/lib/points/payout";
@@ -34,6 +35,7 @@ import { conflictComment } from "@/lib/agent-api/merge-conflict";
 import { moveTo } from "@/lib/issue-substatus";
 import { activeLevels, levelIn } from "@/lib/agents/active-in";
 import { closeSupportThreadsForIssue } from "@/lib/support-threads";
+import { sameCommit } from "@/lib/github/commit-sha";
 
 /**
  * A merger accepting a fix (#434). The gate: the issue is confirmed, no
@@ -71,6 +73,7 @@ import { closeSupportThreadsForIssue } from "@/lib/support-threads";
  */
 
 export const mergeBugSelect = {
+  outsideWork: { select: { agentId: true } },
   id: true,
   title: true,
   organisationId: true,
@@ -464,7 +467,7 @@ async function reviewFix(
   // #489: the accept binds to the commit the testers approved; a reported head
   // past it carries commits nobody judged.
   const reportedHead = report?.headSha ?? null;
-  if (reportedHead && acceptedHeadSha && reportedHead !== acceptedHeadSha) {
+  if (reportedHead && acceptedHeadSha && !sameCommit(reportedHead, acceptedHeadSha)) {
     return {
       status: 409,
       error: "not_ready",
@@ -604,13 +607,19 @@ export async function countedReviewers(
   claim: MergeClaim,
   credited: readonly string[],
 ): Promise<{ reviewers: string[]; weight: number; acceptedHeadSha: string | null }> {
-  const verdicts = await prisma.testVerdict.findMany({
-    // #526: only verdicts on the pull request linked now count; one on an
-    // earlier PR, or with none, says nothing about this code.
-    where: { bugId: bug.id, goodToMerge: true, pullRequestUrl: bug.pullRequestUrl ?? "" },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    select: { id: true, headSha: true, onBehalfOfUserId: true, agent: { select: { id: true, ownerUserId: true, activations: activeLevels } } },
-  });
+  const [all, scope] = await Promise.all([
+    prisma.testVerdict.findMany({
+      // #526: only verdicts on the pull request linked now count; one on an
+      // earlier PR, or with none, says nothing about this code.
+      where: { bugId: bug.id, goodToMerge: true, pullRequestUrl: bug.pullRequestUrl ?? "" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { id: true, goodToMerge: true, headSha: true, proof: true, onBehalfOfUserId: true, agent: { select: { id: true, ownerUserId: true, activations: activeLevels } } },
+    }),
+    prisma.bug.findUnique({ where: { id: bug.id }, select: { projectId: true, typeId: true, areaId: true } }),
+  ]);
+  // Where the organisation has checks, only judgements with proof count, and earn (lib/proof.ts).
+  const checks = scope ? checksFor(await loadProofRules(prisma, bug.organisationId), scope) : NO_CHECKS;
+  const verdicts = all.filter((v) => countsWithProof(v, checks, bug.pullRequestHeadSha));
 
   // Checked again now, not only when submitted: a claim taken since, or a
   // verdict from the claim holder's own side, no longer counts. #489: the
@@ -837,6 +846,8 @@ async function acceptMarketing(
 type RecordValue = string | number | boolean | null;
 
 export type FinalizeResolvedInput = {
+  /** Imported work has a real delivery and no claim; keep its agent attribution. */
+  solverAgentId?: string | null;
   agent: AgentContext;
   bug: Pick<MergeBug, "id" | "organisationId" | "projectId" | "status" | "substatus" | "pullRequestUrl">;
   claim: MergeClaim;
@@ -904,7 +915,7 @@ export async function finalizeResolved(tx: Prisma.TransactionClient, input: Fina
       points: solverReward(reward),
       sourceKey: pointSourceKey("solver", bug.id, solverUserId),
       // The agent that held the claim and delivered the work.
-      agentId: claim?.agentId ?? null,
+      agentId: claim?.agentId ?? input.solverAgentId ?? null,
     });
   }
   if (claim?.dispatcherUserId) {
@@ -1232,7 +1243,7 @@ export async function mergeReviewEntries(
     by: onBehalfOf.name ?? "A member",
     current:
       row.pullRequestUrl === bug.pullRequestUrl &&
-      (!bug.pullRequestHeadSha || !row.headSha || row.headSha === bug.pullRequestHeadSha),
+      (!bug.pullRequestHeadSha || !row.headSha || sameCommit(row.headSha, bug.pullRequestHeadSha)),
     replies: toEntryReplies(replies),
   }));
 }

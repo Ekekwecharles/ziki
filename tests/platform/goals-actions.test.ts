@@ -85,7 +85,7 @@ describe("createGoalAction (#616)", () => {
       { userId: "user-1", organisationId: "org-1" },
       expect.objectContaining({ title: "Ship the launch", budgetPool: 1200, projectId: "proj-1" }),
     );
-    expect(revalidatePath).toHaveBeenCalledWith("/[org]/[project]/goals", "page");
+    expect(revalidatePath).toHaveBeenCalledWith("/projects/[slug]/settings", "page");
   });
 
   it("refuses anyone who is not a project or organisation member", async () => {
@@ -180,7 +180,7 @@ describe("updateGoalStatusAction (#616)", () => {
       "goal-1",
       { status: "completed" },
     );
-    expect(revalidatePath).toHaveBeenCalledWith("/[org]/[project]/goals", "page");
+    expect(revalidatePath).toHaveBeenCalledWith("/projects/[slug]/settings", "page");
     expect(revalidatePath).toHaveBeenCalledWith("/[org]/[project]/goals/[id]", "page");
   });
 

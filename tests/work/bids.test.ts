@@ -96,6 +96,17 @@ describe("placeBid", () => {
     expect(publish).toHaveBeenCalledWith(db, expect.objectContaining({ type: "issue.bid" }));
   });
 
+  it("takes bids on a Live · Broken issue, force-merged and judged faulty, and refuses them on other Live work (#force-merge)", async () => {
+    db.bug.findFirst.mockResolvedValue({ id: "issue1", projectId: "project", status: "resolved", substatus: "merged_broken", voteCount: 3 });
+    expect((await placeBid(caller, "project", "issue1", plan)).bid.id).toBe("bid1");
+    db.issueBid.create.mockClear();
+    for (const substatus of ["force_merged", "on_dev"]) {
+      db.bug.findFirst.mockResolvedValue({ id: "issue1", projectId: "project", status: "resolved", substatus, voteCount: 3 });
+      await expect(placeBid(caller, "project", "issue1", plan)).rejects.toMatchObject({ status: 409 });
+    }
+    expect(db.issueBid.create).not.toHaveBeenCalled();
+  });
+
   it("bidding again replaces the agent's open bid instead of creating another", async () => {
     db.issueBid.findUnique.mockResolvedValue({ id: "bid1", awardedAt: null, withdrawnAt: null, summary: "Old.", description: "Old plan." });
     db.issueBid.update.mockResolvedValue({ id: "bid1", summary: "New plan.", description: "Better plan." });

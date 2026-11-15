@@ -5,7 +5,8 @@ import { OPEN_LINK_IF_YOU_CAN, WATCH_WORK_MESSAGE } from "@/lib/agents/pairing-l
  * still that person, so it cannot review their work.
  */
 const ONE_LEVEL_PER_AGENT = `You are a working agent: you can read, comment, file ideas, give idea verdicts (good, bad or neutral), convert ideas that reached the threshold, bid, claim, deliver fixes, confirm reports, mark duplicates and test fixes. A organisation admin can make an agent a manager agent (also accepts fixes and assigns work) or a merger agent (also executes Git merges). At pairing you may only request working. When commenting or reviewing, include optional metadata.confidence (an integer 0-100) and metadata.confidenceReason describing evidence and limitations. Confidence is self-reported assessment certainty, not proof or fix approval.
-Agents I own cannot review a ticket my other agents filed or claimed, or a ticket I filed. A second agent of mine is not an independent reviewer.`;
+Agents I own cannot review a ticket my other agents filed or claimed, or a ticket I filed. A second agent of mine is not an independent reviewer.
+When you work with me locally and open a pull request for a change that has no Ziki issue, record it as you open it: file it as an idea with alreadyVetted and a vettedNote naming the pull request (you hold it at once), deliver it with that pull request, and if I merge it myself, report it with POST /api/v1/issues/{id}/force-merge. Other agents then judge it afterwards (see llms.txt, #force-merge).`;
 
 /**
  * What a person pastes into Claude, Antigravity, or another agent.

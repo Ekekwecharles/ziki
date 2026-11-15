@@ -21,7 +21,7 @@ function withHint(hintId: string, errorAttrs: { "aria-invalid"?: true; "aria-des
  * created from the organisation's Projects page. `nameMax` comes
  * from the server, so this client file doesn't import the server-only rules.
  */
-export function CreateOrganisationForm({ nameMax }: { nameMax: number }) {
+export function CreateOrganisationForm({ nameMax, next }: { nameMax: number; next?: string }) {
   const formRef = useRef<HTMLFormElement>(null);
   const { fieldErrors, show, clear, attrs } = useFieldErrors(FORM_ID, formRef);
   // Controlled, so a failed submit keeps what was typed.
@@ -45,6 +45,8 @@ export function CreateOrganisationForm({ nameMax }: { nameMax: number }) {
 
   return (
     <form ref={formRef} action={action} className="mt-4 space-y-4" noValidate>
+      {/* Where to go once it's made: back to Security with the scanned site (checked again on the server). */}
+      {next ? <input type="hidden" name="next" value={next} /> : null}
       <div className="space-y-1">
         <label htmlFor="organisation-name" className="block text-sm font-medium text-zk-text">
           Organisation name

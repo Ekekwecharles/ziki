@@ -99,5 +99,5 @@ export function parseTaskView(
 
 /** A tab's address. The sort isn't carried across: each list keeps its own. */
 export function tasksHref(slug: ProjectRef, tab: TaskTab): string {
-  return `${marketingPath(slug)}?status=${tab.param}`;
+  return `${marketingPath(slug, "tasks")}?status=${tab.param}`;
 }

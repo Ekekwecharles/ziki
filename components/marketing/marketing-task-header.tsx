@@ -63,7 +63,7 @@ export function MarketingTaskHeader({
         <div className="min-w-0 flex-[1_1_600px] space-y-2.5">
           <div className="flex items-start gap-2">
             <Link
-              href={marketingPath(projectSlug)}
+              href={marketingPath(projectSlug, "tasks")}
               aria-label="Back to marketing tasks"
               title="Back to marketing tasks"
               className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zk-accent hover:bg-zk-chip print:hidden"

@@ -8,6 +8,7 @@ import { IssueApiError } from "@/lib/agent-api/errors";
 import { cursorOrderBy, cursorWhere, decodeCursor, MAX_PAGE_SIZE, toPage, type IssueCursor } from "@/lib/agent-api/create-policy";
 import { deliveredClaim } from "@/lib/agent-api/merge-verdicts";
 import { countJudgements, judgedBugSelect, judgementSelect, type Judgement } from "@/lib/agent-api/tested-status";
+import { checksFor, loadProofRules } from "@/lib/proof";
 import { strandedDelivery, type StrandedDelivery } from "@/lib/agent-api/stranded-delivery";
 import { idleInProgress } from "@/lib/agent-api/idle";
 import { staleHold, type StaleHold } from "@/lib/agent-api/stale-hold";
@@ -29,6 +30,7 @@ import { absoluteUrl } from "@/lib/site-url";
 import { issuePath } from "@/lib/issue-ref";
 import { refOf } from "@/lib/project-paths";
 import { activeLevels, levelIn } from "@/lib/agents/active-in";
+import { sameCommit } from "@/lib/github/commit-sha";
 
 /**
  * The manager's triage view (#triage): one read that says, for every issue in
@@ -447,8 +449,9 @@ async function judgementsOn(
     ? []
     : (await prisma.delivery.findMany({ where: { bugId: bug.id, pullRequestUrl: bug.pullRequestUrl! }, select: { beneficiaryUserId: true } }))
       .map((delivery) => delivery.beneficiaryUserId);
-  const { good, notGood } = countJudgements(verdicts, bug, credited);
-  const goodAtHead = headSha ? countJudgements(verdicts.filter((v) => v.headSha === headSha), bug, credited).good : null;
+  const checks = checksFor(await loadProofRules(prisma, bug.organisationId), bug);
+  const { good, notGood } = countJudgements(verdicts, bug, credited, checks);
+  const goodAtHead = headSha ? countJudgements(verdicts.filter((v) => sameCommit(v.headSha, headSha)), bug, credited, checks).good : null;
   const byCaller = verdicts.some((v) => v.agent.ownerUserId === callerOwnerId || v.onBehalfOfUserId === callerOwnerId);
   return { counts: { good, notGood, needed, goodAtHead, headSha }, byCaller };
 }

@@ -5,7 +5,8 @@ import { unstable_rethrow } from "next/navigation";
 import { createBugAction } from "@/app/actions/issues";
 import { ClaudeWorking } from "@/components/claude-working";
 import { BASE_PATH } from "@/lib/base-path";
-import { AddIdeaModal } from "@/components/add-idea-modal";
+import { AreaCropper } from "@/components/area-cropper";
+import { CaptureError, MAX_RECORDING_SECONDS, captureScreenFrame, startScreenRecording, type ScreenRecording } from "@/components/idea-capture";
 
 type Upload = { key: string; name: string; id?: string; error?: string };
 
@@ -19,27 +20,29 @@ function titleFrom(text: string): string {
 /**
  * Add Idea as a chat box (#idea-chat): the button opens a composer on its
  * right, in the list's header bar above the table, which grows to hold it,
- * like a chat with an assistant. Type the idea, attach
- * files with +, and send with Enter (Shift+Enter for a new line). It files an
- * idea in this project with the first line as its title; agents structure it
- * afterwards, as any unstructured draft.
+ * like a chat with an assistant. Type the idea, attach files with +, record
+ * the screen or capture an area of it (under the box, kept as images), and
+ * send with Enter (Shift+Enter for a new line). It files an idea in this
+ * project with the first line as its title; agents structure it afterwards,
+ * as any unstructured draft.
  */
 export function IdeaChat({
   projectId,
   className = "",
   alwaysOpen = false,
   placeholder,
-  types,
 }: {
   projectId: string;
   className?: string;
   /** Just the box, open from the start and never closed (the Ideas empty state). */
   alwaysOpen?: boolean;
   placeholder?: string;
-  types?: Array<{ id: string; name: string }>;
 }) {
   const [open, setOpen] = useState(alwaysOpen);
-  const [modalOpen, setModalOpen] = useState(false);
+  // Capture area: the frame being cropped; Record screen: the recording under way.
+  const [crop, setCrop] = useState<{ url: string; blob: Blob } | null>(null);
+  const [recording, setRecording] = useState<{ seconds: number } | null>(null);
+  const recorderRef = useRef<ScreenRecording | null>(null);
   // The empty state and the header may both hold a box on one page.
   const boxId = useId();
   const [text, setText] = useState("");
@@ -78,7 +81,7 @@ export function IdeaChat({
     };
   }, [open, alwaysOpen, text, uploads.length]);
 
-  async function attach(files: FileList | null) {
+  async function attach(files: FileList | File[] | null) {
     for (const file of Array.from(files ?? []).slice(0, 5)) {
       const key = `${file.name}-${Math.random().toString(36).slice(2)}`;
       setUploads((list) => [...list, { key, name: file.name }]);
@@ -91,6 +94,54 @@ export function IdeaChat({
       } catch {
         setUploads((list) => list.map((u) => (u.key === key ? { ...u, error: "Upload failed" } : u)));
       }
+    }
+  }
+
+  function captureFailed(thrown: unknown) {
+    setError(thrown instanceof CaptureError ? thrown.message : "Couldn't use the screen. Try again.");
+  }
+
+  async function captureArea() {
+    setError(null);
+    try {
+      const blob = await captureScreenFrame();
+      setCrop({ url: URL.createObjectURL(blob), blob });
+    } catch (thrown) {
+      captureFailed(thrown);
+    }
+  }
+
+  function closeCrop() {
+    if (crop) URL.revokeObjectURL(crop.url);
+    setCrop(null);
+  }
+
+  function keepCapture(blob: Blob) {
+    closeCrop();
+    void attach([new File([blob], `screen-capture-${Date.now()}.png`, { type: "image/png" })]);
+  }
+
+  function keepRecording(frames: Blob[]) {
+    recorderRef.current = null;
+    setRecording(null);
+    const stamp = Date.now();
+    void attach(frames.map((frame, index) => new File([frame], `screen-recording-${stamp}-${index + 1}.jpg`, { type: "image/jpeg" })));
+  }
+
+  async function toggleRecording() {
+    if (recorderRef.current) {
+      keepRecording(await recorderRef.current.stop());
+      return;
+    }
+    setError(null);
+    try {
+      recorderRef.current = await startScreenRecording({
+        onTick: (seconds) => setRecording({ seconds }),
+        onEnd: keepRecording,
+      });
+      setRecording({ seconds: 0 });
+    } catch (thrown) {
+      captureFailed(thrown);
     }
   }
 
@@ -128,26 +179,16 @@ export function IdeaChat({
         ref={buttonRef}
         type="button"
         onClick={() => {
-          setModalOpen(true);
+          setOpen(true);
+          requestAnimationFrame(() => boxRef.current?.focus());
         }}
-        aria-expanded={modalOpen}
+        aria-expanded={open}
         title="Add Idea"
         className={`issues-new inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-zk-border bg-zk-surface px-2.5 text-[13px] font-semibold text-zk-text hover:bg-zk-chip ${className}`}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
         Add Idea
       </button>
-      <AddIdeaModal
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        projectId={projectId}
-        types={types}
-        onOpenInlineComposer={() => {
-          setModalOpen(false);
-          setOpen(true);
-          requestAnimationFrame(() => boxRef.current?.focus());
-        }}
-      />
     </>
   );
   const composer = (
@@ -220,6 +261,53 @@ export function IdeaChat({
               </button>
             </div>
           </div>
+          {/* Under the box: record the screen, or capture an area of it. Both attach images to the idea. */}
+          <div className="mt-2 flex flex-wrap items-center gap-2 px-1">
+            <button
+              type="button"
+              onClick={() => void toggleRecording()}
+              disabled={pending}
+              aria-pressed={Boolean(recording)}
+              className={`inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition disabled:opacity-40 ${
+                recording ? "border-zk-bad-bd bg-zk-bad-soft text-zk-bad-fg" : "border-zk-border bg-zk-surface text-zk-text2 hover:bg-zk-chip hover:text-zk-text"
+              }`}
+            >
+              <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full bg-red-500 ${recording ? "motion-safe:animate-pulse" : ""}`} />
+              {recording
+                ? `Stop recording · ${Math.floor(recording.seconds / 60)}:${String(recording.seconds % 60).padStart(2, "0")} of ${MAX_RECORDING_SECONDS / 60}:00`
+                : "Record screen"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void captureArea()}
+              disabled={pending || Boolean(recording)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-full border border-zk-border bg-zk-surface px-3 text-xs font-semibold text-zk-text2 transition hover:bg-zk-chip hover:text-zk-text disabled:opacity-40"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" />
+              </svg>
+              Capture area
+            </button>
+          </div>
+          {crop ? (
+            <div role="dialog" aria-modal="true" aria-label="Crop the capture" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+              <div className="max-h-[calc(100dvh-2rem)] w-[min(60rem,100%)] overflow-y-auto rounded-2xl border border-zk-border bg-zk-surface p-4 shadow-2xl">
+                <AreaCropper
+                  imageSrc={crop.url}
+                  onCropComplete={(blob, url) => {
+                    URL.revokeObjectURL(url);
+                    keepCapture(blob);
+                  }}
+                  onUseFull={() => keepCapture(crop.blob)}
+                  onRetake={() => {
+                    closeCrop();
+                    void captureArea();
+                  }}
+                  onCancel={closeCrop}
+                />
+              </div>
+            </div>
+          ) : null}
         </div>
   );
   if (!open) return button;

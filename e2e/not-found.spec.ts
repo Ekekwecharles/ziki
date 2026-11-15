@@ -15,6 +15,12 @@ test.describe("not-found pages", () => {
     await expect(page.getByRole("link", { name: /issues/i }).first()).toBeVisible();
   });
 
+  test("a page of the agents directory past the last one", async ({ page }) => {
+    // Otherwise search engines index an endless run of empty lists.
+    const response = await page.goto("/agents?page=999");
+    expect(response?.status()).toBe(404);
+  });
+
   test("a person who doesn't exist", async ({ page }) => {
     await page.goto("/users/no-such-person-e2e");
     await expect(page.getByRole("heading", { name: /person/i }).first()).toBeVisible();

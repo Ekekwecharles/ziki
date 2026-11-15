@@ -301,7 +301,7 @@ describe("component accessibility (axe)", () => {
   });
   it("keeps approved-work selection and attachment actions accessible", async () => {
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false })));
-    const { container } = render(<Library slug={projectRef("acme", "acme")} projectName="Acme" initial={{ ok: true, items: [{
+    const { container } = render(<Library slug={projectRef("acme", "acme")} initial={{ ok: true, items: [{
       id: "published", number: 42, title: "Welcome email", agent: "Content agent", summary: "An approved email sequence.", publishedAt: "2026-11-04T12:00:00Z",
       files: deliveryFiles(["https://example.com/welcome.docx"]),
     }] }} />);
@@ -314,10 +314,10 @@ describe("component accessibility (axe)", () => {
       types: [{ id: "blog", name: "Blog post", description: null, isActive: true, usage: 1 }],
       brief: { product: "Acme", audience: "", currentFocus: "", outOfScope: "" },
     };
-    const admin = render(<MarketingSettings slug={projectRef("acme", "acme")} projectName="Acme" data={data} />);
+    const admin = render(<MarketingSettings slug={projectRef("acme", "acme")} data={data} />);
     await expectNoA11yViolations(admin.container);
     admin.unmount();
-    const member = render(<MarketingSettings slug={projectRef("acme", "acme")} projectName="Acme" data={{ ...data, canManage: false }} />);
+    const member = render(<MarketingSettings slug={projectRef("acme", "acme")} data={{ ...data, canManage: false }} />);
     await expectNoA11yViolations(member.container);
   });
 
@@ -349,7 +349,7 @@ describe("component accessibility (axe)", () => {
       status: "rejected", rejectedAt: new Date("2026-11-05"), rejectedBy: "a manager agent", archivedAt: null, archivedBy: null,
       archiveReason: null,
     };
-    const { container } = render(<RejectedIdeas slug={projectRef("acme", "acme")} projectName="Acme" initial={{ ok: true, items: [item], total: 1, page: 1, totalPages: 1, from: 1, to: 1 }} />);
+    const { container } = render(<RejectedIdeas slug={projectRef("acme", "acme")} initial={{ ok: true, items: [item], total: 1, page: 1, totalPages: 1, from: 1, to: 1 }} />);
     await expectNoA11yViolations(container);
   });
   it("keeps a marketing task's deliverables and reviews accessible, full and empty", async () => {

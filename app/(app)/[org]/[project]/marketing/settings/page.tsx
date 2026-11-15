@@ -31,5 +31,5 @@ export default async function MarketingSettingsPage({ params }: { params: Promis
       />
     );
   }
-  return <MarketingSettings slug={slug} projectName={context.project.name} data={data} />;
+  return <MarketingSettings slug={slug} data={data} />;
 }

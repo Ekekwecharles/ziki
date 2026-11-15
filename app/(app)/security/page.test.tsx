@@ -6,6 +6,8 @@ import SecurityPage from "./page";
 import SecuritySettingsPage from "./settings/page";
 
 vi.mock("@/app/actions/security-assistant", () => ({ talkToSecurityAssistant: vi.fn() }));
+// The page reads the session to tell a signed-in person from a visitor (the public page); the real auth cannot load here.
+vi.mock("@/auth", () => ({ auth: vi.fn(async () => ({ user: { id: "user_test" } })) }));
 vi.mock("next/navigation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("next/navigation")>()),
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
@@ -24,6 +26,7 @@ vi.mock("@/lib/organisation-access", () => ({
 vi.mock("@/lib/prisma", () => ({
   prisma: {
     securityCheck: { findMany: vi.fn().mockResolvedValue([]) },
+    membership: { findFirst: vi.fn().mockResolvedValue(null), findMany: vi.fn().mockResolvedValue([]) },
     securityCheckItem: { count: vi.fn().mockResolvedValue(0) },
     agentActivation: {
       findMany: vi.fn().mockResolvedValue([
@@ -135,7 +138,7 @@ describe("SecurityPage (/security)", () => {
     expect(markup).toContain('href="/security?view=findings"');
     expect(markup).toContain('href="/security/work"');
     expect(markup).not.toContain('href="/security/activity"');
-    expect(markup).toContain(">Sites<");
+    expect(markup).toContain(">Assets<");
     expect(markup).not.toContain("Open findings");
     expect(markup).not.toContain("Apply filters");
   });
@@ -146,7 +149,78 @@ describe("SecurityPage (/security)", () => {
     expect(markup).toContain("Open findings");
     expect(markup).toContain("Apply filters");
     expect(markup).toContain('name="view" value="findings"');
-    expect(markup).not.toContain("Check a site");
+    expect(markup).not.toContain("Add asset");
+  });
+
+  it("sends a member who owns no workspace straight to creating one, instead of to Your work", async () => {
+    vi.mocked(currentOrganisationAccess).mockResolvedValueOnce({
+      organisationId: "org_123",
+      organisationName: "Workspace",
+      organisationSlug: "workspace",
+      membershipRole: "member",
+      admin: false,
+    });
+
+    // With a scanned site, straight to creating a workspace; it comes back here with the site.
+    await expect(SecurityPage({ searchParams: Promise.resolve({ target: "yourshop.com" }) })).rejects.toMatchObject({
+      digest: expect.stringContaining(`/organisations?next=${encodeURIComponent("/security?target=yourshop.com")}`),
+    });
+  });
+
+  it("asks which workspace a scanned site goes in when you own or run more than one", async () => {
+    const { prisma } = await import("@/lib/prisma");
+    vi.mocked(prisma.membership.findMany).mockResolvedValueOnce([
+      { organisation: { id: "org_a", name: "Shop A" } },
+      { organisation: { id: "org_b", name: "Shop B" } },
+    ] as never);
+    const markup = renderToStaticMarkup(await SecurityPage({ searchParams: Promise.resolve({ target: "yourshop.com" }) }));
+    expect(markup).toContain("Which workspace should yourshop.com go in?");
+    expect(markup).toContain("Shop A");
+    expect(markup).toContain("Shop B");
+    expect(markup).toContain(encodeURIComponent("/security?target=yourshop.com&picked=1"));
+    expect(markup).toContain("Create a new workspace");
+  });
+
+  it("sends a plain member with no scanned site to Your work, as before", async () => {
+    vi.mocked(currentOrganisationAccess).mockResolvedValueOnce({
+      organisationId: "org_123",
+      organisationName: "Workspace",
+      organisationSlug: "workspace",
+      membershipRole: "member",
+      admin: false,
+    });
+
+    await expect(SecurityPage({})).rejects.toMatchObject({ digest: expect.stringContaining("/security/work") });
+  });
+
+  it("keeps a scanned repo's full GitHub address through the redirect, so its scan starts after", async () => {
+    vi.mocked(currentOrganisationAccess).mockResolvedValueOnce({
+      organisationId: "org_123",
+      organisationName: "Workspace",
+      organisationSlug: "workspace",
+      membershipRole: "member",
+      admin: false,
+    });
+
+    await expect(SecurityPage({ searchParams: Promise.resolve({ target: "github.com/settle/app" }) })).rejects.toMatchObject({
+      digest: expect.stringContaining(`/organisations?next=${encodeURIComponent(`/security?target=${encodeURIComponent("github.com/settle/app")}`)}`),
+    });
+  });
+
+  it("opens the workspace a member owns elsewhere, keeping the scanned site", async () => {
+    vi.mocked(currentOrganisationAccess).mockResolvedValueOnce({
+      organisationId: "org_123",
+      organisationName: "Workspace",
+      organisationSlug: "workspace",
+      membershipRole: "member",
+      admin: false,
+    });
+    const { prisma } = await import("@/lib/prisma");
+    vi.mocked(prisma.membership.findFirst).mockResolvedValueOnce({ organisationId: "org_own" } as never);
+
+    await expect(SecurityPage({ searchParams: Promise.resolve({ target: "yourshop.com" }) })).rejects.toMatchObject({
+      digest: expect.stringContaining(`/organisations/open?organisation=org_own&next=${encodeURIComponent("/security?target=yourshop.com")}`),
+    });
   });
 
   it("renders the Security settings gear link with its accessible name", async () => {

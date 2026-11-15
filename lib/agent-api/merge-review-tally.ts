@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { weightedTally } from "@/lib/governance";
 import { activeLevels, levelIn } from "@/lib/agents/active-in";
+import { sameCommit } from "@/lib/github/commit-sha";
 
 /**
  * Merge reviews as votes (#vote-governance). In a threshold-only project any
@@ -33,7 +34,7 @@ export async function mergeReviewVotes(db: Db, bug: ReviewedPullRequest, manager
     orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
     select: { verdict: true, headSha: true, onBehalfOfUserId: true, bug: { select: { organisationId: true } }, agent: { select: { activations: activeLevels } } },
   });
-  const current = rows.filter((row) => !bug.pullRequestHeadSha || !row.headSha || row.headSha === bug.pullRequestHeadSha);
+  const current = rows.filter((row) => !bug.pullRequestHeadSha || !row.headSha || sameCommit(row.headSha, bug.pullRequestHeadSha));
   const latest = new Map<string, string>();
   for (const row of current) if (!latest.has(row.onBehalfOfUserId)) latest.set(row.onBehalfOfUserId, row.verdict);
   const tally = (verdict: "accept" | "reject") =>

@@ -1,5 +1,6 @@
 import { afterSendBack, judgementCounts } from "@/lib/marketing/track";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildCard, checksFor, countsWithProof, judgementProof, NO_CHECKS, proofProblem, type ProofRules } from "@/lib/proof";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /** Judging delivered work (#434, #529, #727, #owner-agents): the agent holding the claim can't judge its own work, anyone else can; one verdict per agent; good to merge needs a ready pull request; weighted judgements move the issue. */
 type Row = {
@@ -42,7 +43,12 @@ const db = vi.hoisted(() => ({
   issueClaim: { groupBy: vi.fn() },
   projectWorkflow: { findUnique: vi.fn() },
   reviewOffer: { findMany: vi.fn(), findUnique: vi.fn(), updateMany: vi.fn(), create: vi.fn(), groupBy: vi.fn() },
-  testVerdict: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
+  testVerdict: { findFirst: vi.fn(), findMany: vi.fn(async () => []), create: vi.fn(), update: vi.fn() },
+  // #deeper-testing: no checks set, so every judgement counts as before.
+  proofRule: { findMany: vi.fn(async (): Promise<unknown[]> => []) },
+  proofCheck: { findMany: async () => [] },
+  attachment: { updateMany: vi.fn(), findMany: vi.fn() },
+  testCardRow: { findFirst: vi.fn(), findMany: vi.fn(async () => []), count: vi.fn(), createMany: vi.fn(), update: vi.fn() },
   pullRequestReport: { findFirst: vi.fn() },
   agentAuditEvent: { create: vi.fn() },
   comment: { create: vi.fn() },
@@ -94,6 +100,7 @@ function report(overrides: Record<string, unknown> = {}) {
 }
 
 import { submitTestVerdict } from "@/lib/agent-api/test-verdict";
+import { actOnTestCardRow, addTestCardRows } from "@/lib/agent-api/test-card";
 import { acceptReviewOffer, REVIEW_DEADLINE_MS, REVIEW_OFFER_TTL_MS, sweepReviewOffers } from "@/lib/agent-api/review-offer";
 import { acceptJobReviewOffer, reviewJobSubmission } from "@/lib/jobs/review";
 import { judgeBlockKind } from "@/lib/agent-api/judge-block";
@@ -409,6 +416,8 @@ describe("the Delivered rule after each judgement (#delivered-step)", () => {
           })),
         ),
       },
+      proofRule: { findMany: async () => [] },
+      proofCheck: { findMany: async () => [] },
       issueClaim: { update: vi.fn(async () => ({})) },
       bugActivity: { create: vi.fn(async () => ({})) },
       agentEvent: { create: vi.fn(async () => ({ id: "e1" })) },
@@ -834,5 +843,175 @@ describe("late review-offer acceptance commits expiry (#532)", () => {
     expect(db.jobReviewOffer.updateMany).toHaveBeenCalledTimes(1);
     expect(db.jobReviewOffer.create).toHaveBeenCalledTimes(1);
     expect(db.agentEvent.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("deeper testing: what counts (#deeper-testing)", () => {
+  const rules: ProofRules = {
+    rules: [
+      { id: "every", projectId: null, issueTypeId: null, projectAreaId: null, checks: ["fixed"] },
+      { id: "fix", projectId: null, issueTypeId: "type-fix", projectAreaId: null, checks: ["repro"] },
+      { id: "web", projectId: "p1", issueTypeId: null, projectAreaId: "area-web", checks: ["phone", "guide"] },
+    ],
+    custom: [{ id: "guide", name: "Keyboard only", instructions: "Tab through it.", required: false }],
+  };
+  const fixInWeb = { projectId: "p1", typeId: "type-fix", areaId: "area-web" };
+  const pass = (attachmentId = "att") => ({ result: "pass" as const, attachmentId, shows: "It works on the delivered commit." });
+
+  it("needs the organisation's checks for every issue and its type, and the project's for its area; guidance never holds a yes", () => {
+    expect(checksFor(rules, fixInWeb)).toEqual({ on: true, required: ["fixed", "repro", "phone"], guidance: ["guide"] });
+    expect(checksFor(rules, { projectId: "p2", typeId: null, areaId: "area-web" }).required).toEqual(["fixed"]);
+    expect(checksFor({ rules: [], custom: [] }, fixInWeb)).toEqual({ on: false, required: [], guidance: [] });
+  });
+
+  it("counts every judgement, as before, where the organisation has no checks", () => {
+    expect(countsWithProof({ goodToMerge: true, headSha: "abc1234", proof: null }, NO_CHECKS, "abc1234")).toBe(true);
+    expect(countsWithProof({ goodToMerge: false, headSha: "abc1234", proof: null }, NO_CHECKS, "abc1234")).toBe(true);
+  });
+
+  it("counts a good-to-merge only with proof for every required check, on the delivered commit", () => {
+    const checks = checksFor(rules, fixInWeb);
+    const full = { checks: { fixed: pass(), repro: pass(), phone: { result: "na", reason: "No phone layout changed." } } };
+    expect(countsWithProof({ goodToMerge: true, headSha: "abc1234", proof: null }, checks, "abc1234")).toBe(false);
+    expect(judgementProof({ goodToMerge: true, headSha: "abc1234", proof: { checks: { fixed: pass() } } }, checks.required, "abc1234")).toEqual({ state: "no_proof", missing: ["repro", "phone"] });
+    expect(countsWithProof({ goodToMerge: true, headSha: "abc1234", proof: full }, checks, "abc1234")).toBe(true);
+    expect(countsWithProof({ goodToMerge: true, headSha: "0ld0000", proof: full }, checks, "abc1234")).toBe(false);
+  });
+
+  it("counts a not-good-to-merge only with proof of what fails, and never a yes that proves a fail", () => {
+    const checks = checksFor(rules, fixInWeb);
+    const fails = { checks: { phone: { result: "fail", attachmentId: "att", shows: "It fails on the delivered commit." } } };
+    expect(countsWithProof({ goodToMerge: false, headSha: "abc1234", proof: null }, checks, "abc1234")).toBe(false);
+    expect(countsWithProof({ goodToMerge: false, headSha: "abc1234", proof: fails }, checks, "abc1234")).toBe(true);
+    expect(judgementProof({ goodToMerge: true, headSha: "abc1234", proof: fails }, checks.required, "abc1234").state).toBe("contradicts");
+  });
+
+  it("holds the issue while a square is unproven or proven to fail; risky rows need two; routed and benched rows never hold it", () => {
+    const row = (id: string, extra: Partial<{ envs: string[]; needsTwo: boolean; source: "criteria" | "beyond"; route: "ci" | "env" }> = {}) => ({
+      id,
+      text: id,
+      why: null,
+      kind: null,
+      proof: "screen" as const,
+      envs: [],
+      needsTwo: false,
+      source: "criteria" as const,
+      route: null,
+      proofAttachmentId: null,
+      decision: null,
+      agent: null,
+      ...extra,
+    });
+    const card = (verdicts: { id: string; proof: unknown }[], priority = "high") =>
+      buildCard({
+        rules,
+        checks: { on: true, required: ["fixed"], guidance: [] },
+        priority,
+        deliveredSha: "abc1234",
+        receipt: null,
+        rows: [row("r1", { envs: ["Phone", "Desktop"] }), row("r2", { needsTwo: true }), row("r3", { route: "env" })],
+        verdicts: verdicts.map((v) => ({ ...v, agent: { name: v.id }, goodToMerge: true, headSha: "abc1234" })),
+      });
+    expect(card([]).holes).toBe(4); // the check, two squares of r1, r2
+    const proven = { checks: { fixed: pass() }, squares: { "r1@Phone": pass(), "r1@Desktop": pass(), r2: pass() } };
+    expect(card([{ id: "Ivy", proof: proven }]).holes).toBe(1); // r2 needs a second tester
+    expect(card([{ id: "Ivy", proof: proven }, { id: "Fern", proof: { squares: { r2: pass() } } }]).holes).toBe(0);
+    expect(card([{ id: "Ivy", proof: { ...proven, squares: { ...proven.squares, "r1@Phone": { result: "fail", attachmentId: "att", shows: "It fails on the delivered commit." } } } }]).failed).toBe(1);
+    // #921: a judgement sent with the full ID of the short delivered commit is on the same code.
+    const full = "abc1234def5678abc1234def5678abc1234def56";
+    const onFull = buildCard({
+      rules,
+      checks: { on: true, required: ["fixed"], guidance: [] },
+      priority: "high",
+      deliveredSha: "abc1234",
+      receipt: null,
+      rows: [row("r1", { envs: ["Phone", "Desktop"] }), row("r2", { needsTwo: true }), row("r3", { route: "env" })],
+      verdicts: [{ id: "Ivy", proof: proven, agent: { name: "Ivy" }, goodToMerge: true, headSha: full }],
+    });
+    expect(onFull.holes).toBe(1);
+    expect(judgementProof({ goodToMerge: true, headSha: full, proof: proven }, ["fixed"], "abc1234").state).not.toBe("earlier_code");
+    expect(judgementProof({ goodToMerge: true, headSha: "fedcba98", proof: proven }, ["fixed"], "abc1234").state).toBe("earlier_code");
+
+    const wild = Array.from({ length: 8 }, (_, i) => row(`w${i}`, { source: "beyond" }));
+    const low = buildCard({ rules, checks: { on: true, required: [], guidance: [] }, priority: "low", deliveredSha: null, receipt: null, rows: wild, verdicts: [] });
+    expect(low.rows.filter((r) => r.bench)).toHaveLength(2); // a low-priority card holds 6 squares
+    expect(low.holes).toBe(6);
+    // Criteria rows too: an author's 12 rows across 4 environments still hold no more than the card's size.
+    const crit = Array.from({ length: 12 }, (_, i) => row(`c${i}`, { source: "criteria", envs: ["A", "B", "C", "D"] }));
+    expect(buildCard({ rules, checks: { on: true, required: [], guidance: [] }, priority: "urgent", deliveredSha: null, receipt: null, rows: crit, verdicts: [] }).holes).toBe(12);
+  });
+});
+
+describe("deeper testing: proof is your own (#deeper-testing)", () => {
+  const pass = (attachmentId: string) => ({ result: "pass" as const, attachmentId, shows: "It works on the delivered commit." });
+
+  it("refuses proof that cites someone else's upload on the issue, and stores nothing", async () => {
+    db.attachment.updateMany.mockResolvedValue({ count: 0 });
+    // att-ada is on the issue already, but Ada uploaded it, not Rob.
+    db.attachment.findMany.mockImplementation(async ({ where }: { where: { uploaderId?: string } }) => (where.uploaderId === "rob" ? [] : [{ id: "att-ada", contentType: "image/png", size: 40_000 }]));
+    const result = await submitTestVerdict(reviewer("r1", "rob"), "bug1", { ...good, proof: { checks: { fixed: pass("att-ada") } } });
+    expect(result).toMatchObject({ status: 400, error: "invalid_request", field: "proof" });
+    expect(db.attachment.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ uploaderId: "rob" }) }));
+    expect(state.verdicts).toHaveLength(0);
+  });
+
+  it("doesn't let the card's author rate its own card", async () => {
+    db.testCardRow.findFirst.mockResolvedValue({ agentId: "r1" });
+    const result = await submitTestVerdict(reviewer("r1", "rob"), "bug1", { ...good, proof: { rating: "thorough" } });
+    expect(result).toMatchObject({ status: 400, field: "proof" });
+    expect(state.verdicts).toHaveLength(0);
+  });
+});
+
+describe("deeper testing: nobody buries or dodges a card (#deeper-testing)", () => {
+  const delivered = bugRow({ track: "product", priority: "high", typeId: null, areaId: null, claims: [] });
+  const wildRow = { text: "Two tabs at once", source: "beyond", kind: "two_at_once" };
+  const refusal = (promise: Promise<unknown>) => promise.then(() => null, (error: { status: number; body: { error: string } }) => ({ status: error.status, error: error.body.error }));
+
+  beforeEach(() => {
+    db.bug.findFirst.mockResolvedValue(delivered);
+    db.proofRule.findMany.mockResolvedValue([{ id: "every", projectId: null, issueTypeId: null, projectAreaId: null, checks: ["fixed"] }]);
+    // Kestrel (k1) drew up the card.
+    db.testCardRow.findFirst.mockImplementation(async ({ where }: { where: { id?: string } }) => (where.id ? { id: where.id, text: "Keyboard open", route: null, agentId: "k1" } : { agentId: "k1" }));
+    db.testCardRow.count.mockResolvedValue(0);
+  });
+  afterEach(() => db.proofRule.findMany.mockImplementation(async () => []));
+
+  it("lets only the card's author write criteria rows; others add wild rows", async () => {
+    expect(await refusal(addTestCardRows(reviewer("f1", "fay"), "bug1", { rows: [{ text: "Composer stays up", source: "criteria" }] }))).toEqual({ status: 403, error: "not_card_author" });
+    expect(db.testCardRow.createMany).not.toHaveBeenCalled();
+  });
+
+  it("caps the rows one tester adds, so nobody buries an issue in squares", async () => {
+    db.testCardRow.count.mockResolvedValue(3);
+    expect(await refusal(addTestCardRows(reviewer("f1", "fay"), "bug1", { rows: [wildRow] }))).toEqual({ status: 409, error: "too_many_rows" });
+    expect(db.testCardRow.createMany).not.toHaveBeenCalled();
+  });
+
+  it("doesn't let a tester route away a row someone else wrote", async () => {
+    expect(await refusal(actOnTestCardRow(reviewer("f1", "fay"), "bug1", "row1", { action: "cant_prove" }))).toEqual({ status: 403, error: "not_row_author" });
+    expect(db.testCardRow.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("deeper testing: a file must show what it proves (#deeper-testing)", () => {
+  const FILES: Record<string, { contentType: string; size: number }> = {
+    shot: { contentType: "image/png", size: 48_000 },
+    blank: { contentType: "image/png", size: 70 },
+    log: { contentType: "text/plain", size: 900 },
+  };
+  const lookup = { file: (id: string) => FILES[id], rowProof: (id: string) => (id === "race" ? ("test" as const) : undefined), changed: ["tests/composer.test.ts"] };
+  const entry = (attachmentId: string, test?: string) => ({ result: "pass" as const, attachmentId, shows: "What the tester saw on the commit.", test });
+
+  it("takes a real screenshot for what you see, and a test's output with its file for a test", () => {
+    expect(proofProblem({ checks: { phone: entry("shot"), regression: entry("log", "tests/composer.test.ts") }, squares: { race: entry("log", "tests/composer.test.ts") } }, lookup)).toBeNull();
+  });
+
+  it("refuses a blank image, a picture of a test, a log for a screenshot, and a test that isn't among the changed files", () => {
+    expect(proofProblem({ checks: { phone: entry("blank") } }, lookup)).toMatch(/too small/);
+    expect(proofProblem({ checks: { regression: entry("shot", "tests/composer.test.ts") } }, lookup)).toMatch(/picture can't prove a test/);
+    expect(proofProblem({ squares: { "race@Phone": entry("shot") } }, lookup)).toMatch(/picture can't prove a test/);
+    expect(proofProblem({ checks: { phone: entry("log") } }, lookup)).toMatch(/attach a screenshot/);
+    expect(proofProblem({ checks: { regression: entry("log", "tests/other.test.ts") } }, lookup)).toMatch(/name the test/);
   });
 });

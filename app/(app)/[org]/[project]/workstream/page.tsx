@@ -68,7 +68,7 @@ const SUMMARY_GROUPS: { label: string; kinds: WorkKind[] }[] = [
   { label: "Ideas", kinds: ["idea", "convert_idea", "reject_idea"] },
   { label: "Open", kinds: ["confirm_issue", "open_issue", "vote_importance", "investigate_issue", "ready_issue", "review_bid", "award_bid", "offer", "review_offer"] },
   { label: "In progress", kinds: ["active_claim", "owner_request", "reclaim_issue", "sense_check", "review_idle", "deliver_stranded"] },
-  { label: "Done", kinds: ["test_fix", "accept_fix"] },
+  { label: "Done", kinds: ["test_fix", "add_test", "accept_fix"] },
   { label: "Merge", kinds: ["merge_fix", "report_pr_status", "repair_pull_request", "reconcile_merged", "await_release"] },
   { label: "Live", kinds: ["report_deployment"] },
 ];
@@ -136,7 +136,8 @@ export default async function WorkstreamPage({ params }: { params: Promise<{ org
       voteCount: true,
       boostedAt: true,
       createdAt: true,
-      reporter: { select: { name: true, email: true } },
+      // Reporters' names only (#access-control).
+      reporter: { select: { name: true } },
     },
   });
 
@@ -148,7 +149,6 @@ export default async function WorkstreamPage({ params }: { params: Promise<{ org
     actionRequired: "triage_vote",
     expeditedBy: {
       name: b.reporter?.name || "Workspace Member",
-      handle: b.reporter?.email?.split("@")[0] || "member",
     },
     urgencyNote: "Prioritized into Work Stream Blocking Queue by human operator.",
     progress: {

@@ -44,7 +44,7 @@ const FIRST_CLOSE = Prisma.sql`
   SELECT a."bugId" AS bug_id, MIN(a."createdAt") AS closed_at
   FROM "BugActivity" a
   WHERE a.type = 'status_changed'
-    AND a.metadata ->> 'to' IN ('resolved', 'on_dev', 'on_staging', 'on_prod', 'published', 'closed')
+    AND a.metadata ->> 'to' IN ('resolved', 'on_dev', 'on_staging', 'on_prod', 'published', 'force_merged', 'closed')
   GROUP BY a."bugId"
 `;
 

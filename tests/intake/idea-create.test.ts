@@ -69,7 +69,7 @@ vi.mock("@anthropic-ai/sdk", () => {
 vi.mock("@anthropic-ai/sdk/helpers/zod", () => ({ zodOutputFormat: (schema: unknown) => schema }));
 
 import { createIdeaWithPolicy, encodeCursor, type CreatePolicyInput } from "@/lib/agent-api/create-policy";
-import { assertVettedCap, assertVettedFields, createIdeaSchema, listAgentIdeas, readAgentIdea, VETTED_IDEAS_PER_DAY } from "@/lib/agent-api/ideas";
+import { assertVettedFields, createIdeaSchema, listAgentIdeas, readAgentIdea } from "@/lib/agent-api/ideas";
 import { countAgentIssues, issueProject, listAgentIssues } from "@/lib/agent-api/issues";
 import { GET as suggestIssues } from "@/app/api/issues/suggest/route";
 import { NextRequest } from "next/server";
@@ -839,8 +839,6 @@ describe("feature plans feed the existing idea lifecycle", () => {
 });
 
 describe("already vetted ideas", () => {
-  const owner = { agentId: "agent1", name: "Ada's Claude", ownerId: "ada", organisationId: "t1", level: "working" as const, burst: false, keyId: "k1" };
-
   it("takes alreadyVetted only with a note saying where it was approved, and a note only with alreadyVetted", () => {
     expect(() => assertVettedFields({})).not.toThrow();
     expect(() => assertVettedFields({ alreadyVetted: true, vettedNote: "Approved by Mark, sheet row 42" })).not.toThrow();
@@ -849,15 +847,5 @@ describe("already vetted ideas", () => {
     const idea = { title: "Add a CSV export", summary: "People want a CSV of the activity.", description: "People want their data as a CSV." };
     expect(createIdeaSchema.safeParse({ ...idea, alreadyVetted: "yes" }).success).toBe(false);
     expect(createIdeaSchema.safeParse({ ...idea, alreadyVetted: true, vettedNote: "ok" }).success).toBe(false);
-  });
-
-  it("allows five in 24 hours per owner and refuses the sixth with what to do instead", async () => {
-    db.agentAuditEvent.count.mockResolvedValue(VETTED_IDEAS_PER_DAY - 1);
-    await expect(assertVettedCap(db as never, owner)).resolves.toBeUndefined();
-    expect(db.agentAuditEvent.count).toHaveBeenCalledWith({
-      where: expect.objectContaining({ action: "idea.vetted", undoneAt: null, agent: { ownerUserId: "ada" } }),
-    });
-    db.agentAuditEvent.count.mockResolvedValue(VETTED_IDEAS_PER_DAY);
-    await expect(assertVettedCap(db as never, owner)).rejects.toMatchObject({ status: 429, body: { error: "vetted_limit", limit: 5 } });
   });
 });

@@ -178,7 +178,7 @@ export async function listDeliveries(scope: { organisationId: string; projectId?
 }
 
 export type DeliverResult =
-  | { status: 201 | 200; delivery: DeliveryEntry; replaced: boolean }
+  | { status: 201 | 200; delivery: DeliveryEntry; replaced: boolean; issueId: string; pullRequestUrl: string | null }
   | { status: 400 | 403 | 404 | 409 | 422; error: string; message: string; field?: string };
 
 /**
@@ -209,6 +209,7 @@ export async function deliverWork(
       track: true,
       status: true,
       substatus: true,
+      outsideWork: { select: { agentId: true } },
       pullRequestUrl: true,
       project: { select: { repoUrl: true, ...PROJECT_REPOSITORIES_SELECT } },
     },
@@ -262,7 +263,18 @@ export async function deliverWork(
   let beneficiaryUserId = claim?.beneficiaryUserId ?? null;
   /** Set when a manager agent files the delivery on the holder's behalf (#stranded-delivery). */
   let onBehalfOf = false;
-  if (!claim) {
+  let outsideResubmission = false;
+  if (!claim && bug.outsideWork?.agentId === agent.agentId) {
+    // A manager may send an imported open PR back to In progress. Its original
+    // contributor can revise that delivery without inventing a claim, provided
+    // no other agent has since taken the work through the ordinary workflow.
+    const otherClaim = await prisma.issueClaim.findFirst({
+      where: { bugId: bug.id, releasedAt: null, status: { in: ["active", "planning", "offered"] } }, select: { id: true },
+    });
+    if (otherClaim) return { status: 409, error: "no_claim", message: "Another agent holds this issue. Only its holder may deliver." };
+    beneficiaryUserId = agent.ownerId;
+    outsideResubmission = true;
+  } else if (!claim) {
     // #539: a reviewer who accepted this issue's review offer may deliver when
     // nothing is delivered yet, so a missing solver doesn't strand the work.
     const reviewOffer = await prisma.reviewOffer.findFirst({
@@ -358,6 +370,14 @@ export async function deliverWork(
   const from = bug.substatus;
 
   const { delivery, replaced } = await prisma.$transaction(async (tx) => {
+    if (outsideResubmission) {
+      await tx.$queryRaw`SELECT "id" FROM "Bug" WHERE "id" = ${bug.id} FOR UPDATE`;
+      const current = await tx.bug.findUnique({ where: { id: bug.id }, select: { status: true, pullRequestUrl: true, assigneeId: true } });
+      const held = await tx.issueClaim.findFirst({ where: { bugId: bug.id, releasedAt: null, status: { in: ["active", "planning", "offered"] } }, select: { id: true } });
+      if (!current || current.status !== bug.status || current.pullRequestUrl !== bug.pullRequestUrl || current.assigneeId !== agent.ownerId || held) {
+        throw new IssueApiError(409, "This issue's state or holder changed. Read it again before revising the imported delivery.");
+      }
+    }
     const existing = await tx.delivery.findUnique({ where: { bugId_agentId: { bugId: bug.id, agentId: agent.agentId } }, select: { id: true } });
     const data = {
       beneficiaryUserId: beneficiaryUserId!,
@@ -453,5 +473,5 @@ export async function deliverWork(
 
   const entries = await deliveryEntries({ id: bug.id, pullRequestUrl });
   const entry = entries.find((row) => row.id === delivery.id)!;
-  return { status: replaced ? 200 : 201, delivery: entry, replaced };
+  return { status: replaced ? 200 : 201, delivery: entry, replaced, issueId: bug.id, pullRequestUrl };
 }

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Avatar } from "@/components/avatar";
 import { RichText } from "@/components/rich-text";
 import { ProjectOverviewJoinButton } from "@/components/project-overview-join-button";
+import { ProjectJoinRequestButton } from "@/components/project-join-request-button";
 import { Badge } from "@/components/ui/badge";
 import { issuesPath, marketingPath, orgHomePath, projectRef } from "@/lib/project-paths";
 import { publicReportPath } from "@/lib/public-project-paths";
@@ -149,6 +150,18 @@ export function ProjectOverviewView({
                   className="inline-flex min-h-10 items-center justify-center rounded-xl bg-zk-accent px-4 py-2 text-sm font-bold text-white hover:opacity-90"
                 >
                   Sign in to Join
+                </Link>
+              )
+            ) : !data.isMember && project.visibility === "public" ? (
+              // Public but not open: ask the maintainers instead (#join-requests).
+              currentUserId ? (
+                <ProjectJoinRequestButton project={project} state={data.joinRequest} size="md" />
+              ) : (
+                <Link
+                  href={`/login?callbackUrl=${encodeURIComponent(`/${ref}`)}`}
+                  className="inline-flex min-h-10 items-center justify-center rounded-xl border border-zk-border bg-zk-surface px-4 py-2 text-sm font-semibold text-zk-text hover:bg-zk-chip"
+                >
+                  Sign in to ask to join
                 </Link>
               )
             ) : null}

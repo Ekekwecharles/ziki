@@ -49,6 +49,7 @@ export function rankReviewOfferCandidates<T extends ReviewOfferCandidate>(candid
 }
 
 const bugReviewSelect = {
+  outsideWork: { select: { agentId: true } },
   id: true,
   organisationId: true,
   projectId: true,

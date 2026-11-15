@@ -16,6 +16,16 @@ import type { SecurityTargetKind } from "@prisma/client";
 export type ParsedTarget = { kind: SecurityTargetKind; value: string; input: string };
 export type TargetParseResult = { ok: true; target: ParsedTarget } | { ok: false; error: string };
 
+/**
+ * The address to hand to anything that reads a link again (the quick scan, Show
+ * it's yours): a repo's value is just "owner/name", which the parser does not
+ * accept on its own, so it goes with its GitHub address. Websites and servers
+ * are already their own address.
+ */
+export function targetAddress(target: Pick<ParsedTarget, "kind" | "value">): string {
+  return target.kind === "repo" ? `github.com/${target.value}` : target.value;
+}
+
 export const TARGET_INPUT_MAX = 300;
 
 const EMPTY = "Paste a website, a server address or a GitHub repo.";

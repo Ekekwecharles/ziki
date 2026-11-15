@@ -156,6 +156,7 @@ export async function findReadyToMergeIssues(
       reporterId: true,
       beneficiaryUserId: true,
       assigneeId: true,
+      outsideWork: { select: { agentId: true } },
       createdByAgentId: true,
       createdByAgent: { select: { ownerUserId: true } },
       createdAt: true,

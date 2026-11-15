@@ -43,7 +43,7 @@ async function requireSettingsAdmin(slug: ProjectRef) {
 
 function revalidateMarketing(slug: ProjectRef): void {
   revalidatePath(marketingPath(slug, "settings"));
-  revalidatePath(marketingPath(slug));
+  revalidatePath(marketingPath(slug, "tasks"));
 }
 
 /**

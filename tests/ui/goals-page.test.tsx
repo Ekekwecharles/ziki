@@ -42,10 +42,9 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { describeBudget } from "@/lib/goals/pool-split";
-import GoalsPage from "@/app/(app)/[org]/[project]/goals/page";
+import { ProjectGoals } from "@/app/(app)/[org]/[project]/goals/project-goals";
 import GoalDetailPage from "@/app/(app)/[org]/[project]/goals/[id]/page";
 
-const params = Promise.resolve({ org: "acme", project: "orbit" });
 const detailParams = Promise.resolve({ org: "acme", project: "orbit", id: "goal-1" });
 
 const context = {
@@ -100,7 +99,7 @@ beforeEach(() => {
   goalFindFirst.mockResolvedValue(goalRow());
 });
 
-describe("goals list page (#616)", () => {
+describe("goals in the project settings (#616)", () => {
   it("renders the create form and each goal's pool figures", async () => {
     listGoals.mockResolvedValue([
       goalRow({}, { budgetPool: 1000, allocated: 600 }),
@@ -108,7 +107,7 @@ describe("goals list page (#616)", () => {
     ]);
     allocationFindMany.mockResolvedValue([]);
 
-    const html = renderToStaticMarkup(await GoalsPage({ params }));
+    const html = renderToStaticMarkup(await ProjectGoals({ org: "acme", organisationId: "org-1", project: { id: "proj-1", slug: "orbit", ref: context.project.ref } }));
 
     expect(html).toContain("create-goal-form");
     expect(html).toContain("Ship the launch");
@@ -127,7 +126,7 @@ describe("goals list page (#616)", () => {
     ]);
     allocationFindMany.mockResolvedValue([{ goalId: "goal-1", targetGoalId: "goal-2", amount: 300 }]);
 
-    const html = renderToStaticMarkup(await GoalsPage({ params }));
+    const html = renderToStaticMarkup(await ProjectGoals({ org: "acme", organisationId: "org-1", project: { id: "proj-1", slug: "orbit", ref: context.project.ref } }));
 
     expect(html).toContain("goal-tree");
     expect(html).toContain("funded 300 credits by");
@@ -139,16 +138,11 @@ describe("goals list page (#616)", () => {
 
   it("shows the empty state when the project has no goals yet", async () => {
     listGoals.mockResolvedValue([]);
-    const html = renderToStaticMarkup(await GoalsPage({ params }));
+    const html = renderToStaticMarkup(await ProjectGoals({ org: "acme", organisationId: "org-1", project: { id: "proj-1", slug: "orbit", ref: context.project.ref } }));
     expect(html).toContain("No goals yet");
     expect(allocationFindMany).not.toHaveBeenCalled();
   });
 
-  it("404s for a visitor outside the project", async () => {
-    requireProject.mockResolvedValue({ ...context, canContribute: false });
-    await expect(GoalsPage({ params })).rejects.toThrow("NEXT_NOT_FOUND");
-    expect(listGoals).not.toHaveBeenCalled();
-  });
 });
 
 describe("goal detail page (#616)", () => {

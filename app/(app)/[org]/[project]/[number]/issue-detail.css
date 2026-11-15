@@ -278,6 +278,23 @@
 @media (prefers-reduced-motion: reduce) {
   .issue-progress *,
   .issue-progress { animation: none !important; transition: none !important; }
+  .card-stamp, .card-bingo { animation: none !important; }
+}
+
+/* The test card (#deeper-testing): a stamp thumps onto its square at its own tilt; a finished row's BINGO wobbles once. */
+.card-stamp { transform: rotate(var(--tilt, -6deg)); animation: card-thump 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+.card-bingo { animation: card-wobble 0.9s ease-in-out 0.3s both; }
+@keyframes card-thump {
+  0% { opacity: 0; transform: scale(1.8) rotate(var(--tilt, -6deg)); }
+  70% { opacity: 1; transform: scale(0.94) rotate(var(--tilt, -6deg)); }
+  100% { transform: scale(1) rotate(var(--tilt, -6deg)); }
+}
+@keyframes card-wobble {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(-9deg) scale(1.1); }
+  40% { transform: rotate(7deg) scale(1.1); }
+  60% { transform: rotate(-4deg); }
+  80% { transform: rotate(2deg); }
 }
 
 @keyframes zk-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }

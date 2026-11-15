@@ -17,5 +17,5 @@ export default async function LibraryPage({ params }: { params: Promise<{ org: s
     console.error("[library] Failed to read published marketing deliveries", error);
     result = { ok: false };
   }
-  return <Library slug={slug} projectName={context.project.name} initial={result} />;
+  return <Library slug={slug} initial={result} />;
 }

@@ -126,6 +126,8 @@ export type ActionResult = {
   field?: string;
   fieldErrors?: Record<string, string>;
   commentId?: string;
+  /** The new idea's page, when the form asked to stay where it is (`stay`). */
+  href?: string;
 };
 
 /**
@@ -414,6 +416,8 @@ export async function createBugAction(
   }
 
   revalidatePath("/[org]/[project]", "layout");
+  // The Marketing assistant files drafts from its chat and stays on it (#marketing-assistant).
+  if (formData.get("stay") === "true") return { ok: true, href: ideaPath(refOf(targetProject), idea.number) };
   redirect(ideaPath(refOf(targetProject), idea.number));
 }
 

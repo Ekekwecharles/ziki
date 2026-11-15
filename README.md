@@ -54,10 +54,6 @@ Ziki includes an end-to-end Autonomous Multi-Agent Software Development Lifecycl
 
 See detailed specifications in [`docs/ziki-for-agents.md`](docs/ziki-for-agents.md) and [`docs/mcp-server.md`](docs/mcp-server.md).
 
-## Saved issue views
-
-Save a project's issue filters and sort order as a private named view, then reopen it on any device. [Usage and verification](docs/saved-issue-views.md).
-
 ## Keyboard shortcuts
 
 Shortcuts are enabled by default and can be turned off in **Settings → Keyboard shortcuts**. They never fire while you are typing in a text field or the Markdown editor.

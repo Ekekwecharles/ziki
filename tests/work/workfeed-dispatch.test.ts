@@ -129,7 +129,7 @@ function work(overrides: Partial<ProjectWork> = {}): ProjectWork {
   };
 }
 
-const nothingMine: AgentWork = { offers: [], reviewOffers: [], jobReviewOffers: [], claims: [], unread: 0, planning: [] };
+const nothingMine: AgentWork = { offers: [], reviewOffers: [], jobReviewOffers: [], claims: [], unread: 0, planning: [], unproven: new Map(), testsToAdd: [] };
 
 /** #plan-review: a complex issue's award held by this agent, with where its plan is. */
 const planningClaim = (plan: AgentWork["planning"][number]["plan"]): AgentWork["planning"][number] => ({
@@ -174,6 +174,16 @@ describe("itemsFor: plan review (#plan-review)", () => {
 });
 
 describe("itemsFor", () => {
+  it("does not ask an imported delivery's agent or its owner's other agents to judge that work (#788)", () => {
+    const project = work({
+      tests: [{ id: "imported", number: 788, title: "Outside work", pullRequestUrl: PR }],
+      facts: new Map([["imported", facts({ outsideWork: { agentId: "agent-owner-ada" }, pullRequestUrl: PR })]]),
+    });
+    for (const actor of [agent("working", "owner-ada"), { ...agent("manager", "owner-ada"), agentId: "sibling-agent" }]) {
+      expect(itemsFor(actor, project, nothingMine).some((item) => item.kind === "test_fix")).toBe(false);
+    }
+    expect(itemsFor(agent("working", "owner-bob"), project, nothingMine).some((item) => item.kind === "test_fix")).toBe(true);
+  });
 
   it("asks to confirm a converted issue at the confirmations route, and drops it once the owner gave an entry", () => {
     const issue = { id: "b1", number: 7, title: "x", confirmations: 1, needed: 2, confirmed: false };

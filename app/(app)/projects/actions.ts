@@ -11,7 +11,6 @@ import { ideasPath, orgPath, projectRef } from "@/lib/project-paths";
 import { currentOrganisationIdFor, NO_ORGANISATION_MESSAGE } from "@/lib/organisation-context";
 import { isAdminOfOrganisation } from "@/lib/agents/membership";
 import { isSuperAdmin, type AppRole } from "@/lib/roles";
-import { createMissionSchema, createTestMissions } from "@/lib/missions";
 import {
   nextProjectSlug,
   projectLinksSchema,
@@ -32,9 +31,26 @@ export type ProjectActionResult = {
   message?: string;
 };
 
-/** Back to the org's Projects page the action came from (#project-urls), with a message. */
-async function projectsMessage(key: "error" | "notice", message: string): Promise<string> {
-  const slug = await refererProjectRef();
+/**
+ * Back to the org's Projects page (#project-urls), with a message. From a
+ * project's page it is that project's; from the project's settings (no project
+ * in the address), or when that project is the one just deleted, it is the
+ * organisation's first active project's.
+ */
+async function projectsMessage(
+  key: "error" | "notice",
+  message: string,
+  place?: { organisationId: string; deletedSlug?: string },
+): Promise<string> {
+  let slug = await refererProjectRef();
+  if (place && (!slug || (place.deletedSlug && String(slug).split("/")[1] === encodeURIComponent(place.deletedSlug)))) {
+    const other = await prisma.project.findFirst({
+      where: { organisationId: place.organisationId, archivedAt: null, ...(place.deletedSlug ? { slug: { not: place.deletedSlug } } : {}) },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { slug: true, organisation: { select: { slug: true } } },
+    });
+    slug = other ? projectRef(other.organisation.slug, other.slug) : null;
+  }
   return slug ? `${orgPath(slug, "projects")}?${key}=${encodeURIComponent(message)}` : "/home";
 }
 
@@ -67,6 +83,7 @@ function projectInOrganisation(organisationId: string, projectId: string) {
     select: {
       id: true,
       name: true,
+      slug: true,
       archivedAt: true,
       _count: { select: { bugs: true } },
     },
@@ -186,40 +203,6 @@ export async function saveProjectLinksAction(
   return { message: "Saved." };
 }
 
-/** Create a route/role/viewport mission set for a project (#619). */
-export async function createTestMissionAction(
-  _previous: ProjectActionResult | undefined,
-  formData: FormData,
-): Promise<ProjectActionResult> {
-  const user = await requireUser();
-  const organisationId = await currentOrganisationIdFor(user.id);
-  if (!organisationId) return { error: NO_ORGANISATION_MESSAGE };
-
-  const projectId = String(formData.get("projectId") ?? "").trim();
-  const project = projectId ? await prisma.project.findFirst({
-    where: { id: projectId, organisationId },
-    select: { id: true },
-  }) : null;
-  if (!project) return { error: "Project not found." };
-  if (!(await isAdminOfOrganisation(user, organisationId))) {
-    return { error: "Only project admins can manage test missions." };
-  }
-
-  const parsed = createMissionSchema.safeParse({
-    routePattern: formData.get("routePattern"),
-    brief: formData.get("brief"),
-    roles: formData.getAll("roles"),
-    viewports: formData.getAll("viewports"),
-  });
-  if (!parsed.success) return fromZodError(parsed.error, "Check the mission details");
-
-  const result = await createTestMissions(project.id, parsed.data);
-  revalidatePath("/", "layout");
-  return result.count > 0
-    ? { message: `Added ${result.count} test mission${result.count === 1 ? "" : "s"}.` }
-    : { message: "Those route, role, and viewport missions already exist." };
-}
-
 /**
  * Create a project in the current organisation and make it active (#426).
  *
@@ -336,7 +319,7 @@ export async function setProjectArchivedAction(formData: FormData): Promise<void
   }
 
   revalidatePath("/", "layout");
-  redirect(await projectsMessage("notice", archived ? "Project archived." : "Project restored."));
+  redirect(await projectsMessage("notice", archived ? "Project archived." : "Project restored.", { organisationId: owner.organisationId }));
 }
 
 /** Delete a project after the owner types its name, and only when it has no issues. */
@@ -367,5 +350,5 @@ export async function deleteProjectAction(formData: FormData): Promise<void> {
   }
 
   revalidatePath("/", "layout");
-  redirect(await projectsMessage("notice", "Project deleted."));
+  redirect(await projectsMessage("notice", "Project deleted.", { organisationId: owner.organisationId, deletedSlug: project.slug }));
 }

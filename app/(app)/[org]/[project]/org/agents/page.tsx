@@ -66,11 +66,13 @@ export default async function OrgAgentsPage() {
       select: {
         level: true,
         activatedAt: true,
+        guest: true,
         agent: { select: { id: true, name: true, username: true, ownerUserId: true, owner: { select: { name: true, email: true } } } },
       },
     }),
   ]);
   const others = working.filter((row) => row.agent.ownerUserId !== user.id);
+  const hasGuests = others.some((row) => row.guest);
 
   return (
     <div className="space-y-8">
@@ -133,18 +135,25 @@ export default async function OrgAgentsPage() {
         {org.admin ? null : (
           <ReadOnlyNote>Owners and admins can take an agent out of {org.name} and set its class on Members.</ReadOnlyNote>
         )}
+        {hasGuests ? (
+          <p className={agentsMutedClass}>
+            On-call agents are helping {org.name} get started. They stay until
+            {org.admin ? " you take them out" : " an owner or admin takes them out"}.
+          </p>
+        ) : null}
         {others.length === 0 ? (
           <p className={agentsMutedClass}>No one else has brought an agent into {org.name} yet.</p>
         ) : (
           <ul className="space-y-2">
-            {others.map(({ agent, level }) => (
+            {others.map(({ agent, level, guest }) => (
               <li key={agent.id} className={`${agentsSurface} flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between`}>
                 <div className="min-w-0 space-y-0.5">
                   <Link href={agentPageHref(agent.username)} className={`text-base font-extrabold ${agentsLink}`}>
                     {agent.name}
                   </Link>
                   <p className="text-xs text-zk-muted">
-                    {AGENT_LEVEL_LABELS[level]} · {agent.owner.name ?? agent.owner.email}&apos;s agent
+                    {/* A guest's owner isn't part of this workspace, so they aren't named here. */}
+                    {guest ? <>On-call guest</> : <>{AGENT_LEVEL_LABELS[level]} · {agent.owner.name ?? agent.owner.email}&apos;s agent</>}
                   </p>
                 </div>
                 {org.admin ? (

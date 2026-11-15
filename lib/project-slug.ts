@@ -20,6 +20,8 @@ export const RESERVED_PROJECT_SLUGS: ReadonlySet<string> = new Set([
   "fonts",
   "for-agents",
   "how-it-works",
+  // Ziki Security's public page (#security-checks).
+  "security-check",
   // Old business links from earners' emails (#earn-outreach): /r/<code> still opens Ziki.
   "r",
   "session-expired",

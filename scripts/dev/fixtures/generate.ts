@@ -274,6 +274,9 @@ const PLAN: Array<[string, string, number]> = [
   ["resolved", "on_dev", 6],
   ["resolved", "on_staging", 5],
   ["resolved", "on_prod", 50],
+  // #force-merge: merged by its author without Ziki's checks, waiting for judgements; and judged faulty afterwards.
+  ["resolved", "force_merged", 3],
+  ["resolved", "merged_broken", 2],
   ["closed", "closed", 10],
 ];
 const STATUS_BY_MARKETING = { open: "open", in_progress: "in_progress", requires_review: "done", accepted: "done", published: "resolved", closed: "closed" } as const;
@@ -467,7 +470,8 @@ for (const [status, substatus, count] of PLAN) {
     rows.claims.push({
       id: claimId, bugId: bug, beneficiaryUserId: userId(winner.owner), agentId: agentId(winner.key), status: resolved ? "released" : "active",
       offeredAt: awarded.awardedAt, claimedAt, lastHeartbeatAt: Math.max(5, clock - 30), deliverBy: -int(60, 240),
-      releasedAt: resolved ? Math.max(1, clock - 120) : null, releaseReason: resolved ? "resolved" : null, ago: claimedAt,
+      releasedAt: resolved ? Math.max(1, clock - 120) : null,
+      releaseReason: resolved ? (substatus === "force_merged" || substatus === "merged_broken" ? "force_merge" : "resolved") : null, ago: claimedAt,
     });
     for (const other of rows.bids.filter((x) => x.bugId === bug && x.id !== bidIds[0])) other.withdrawnAt = true;
     b.assigneeId = userId(winner.owner);
@@ -498,6 +502,20 @@ for (const [status, substatus, count] of PLAN) {
       });
     };
     report0("open");
+
+    // #force-merge: its author merged it themself; judged afterwards, and found faulty when Broken.
+    if (substatus === "force_merged" || substatus === "merged_broken") {
+      activity(bug, winner.owner, "Merged by its author without Ziki's checks: moved to Live · Force-merged", clock, "requires_review", "force_merged");
+      if (substatus === "merged_broken") {
+        let notGood = 0;
+        for (const j of sample(allAgents.filter((a) => a.key !== winner.key && a.level === "working"), 3)) {
+          rows.testVerdicts.push({ id: id("testverdict", `${num}-broken-${++notGood}`), bugId: bug, agentId: agentId(j.key), onBehalfOfUserId: userId(j.owner), goodToMerge: false, summary: "Not good: the merge broke it.", description: `After the merge ${t.subject} still fails on ${t.where}; ${t.file} misses the empty case.`, pullRequestUrl: pr, headSha: head, ago: step() });
+        }
+        b.assigneeId = null;
+        activity(bug, winner.owner, `Judgements weighing ${notGood} say the force-merged work is not good: marked Live · Broken, open for bids to fix it`, clock, "force_merged", "merged_broken");
+      }
+      continue;
+    }
 
     // Judgements: below the weight needed at Requires review, enough after.
     const judges = allAgents.filter((a) => a.key !== winner.key);

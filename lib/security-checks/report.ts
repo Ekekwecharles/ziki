@@ -1,4 +1,6 @@
 import "server-only";
+import { readQuickScan } from "@/lib/security-checks/entry";
+import type { PreviewSummary } from "@/lib/security-checks/preview-summary";
 import type {
   IdeaStatus,
   Prisma,
@@ -7,26 +9,27 @@ import type {
   SecuritySeverity,
   SecurityTargetKind,
   Status,
-  Substatus,
 } from "@prisma/client";
 import { issuePath } from "@/lib/issue-ref";
 import { prisma } from "@/lib/prisma";
 import { refOf } from "@/lib/project-paths";
-import { safeHref } from "@/lib/rich-text";
-import { isCheckPaid, isReportPosted } from "@/lib/security-checks";
+import { isReportPosted, isTargetProven } from "@/lib/security-checks";
 import { SECURITY_SEVERITIES } from "@/lib/security-severity";
 
 /**
- * What a client may see of one security check (#security-checks, part 4).
- * The page and the PDF both read the report through `loadCheckReport`, so
- * they always show the same thing.
+ * What a client may see of one security check (#security-checks, 12 and 14
+ * Nov plans, part S): the page and the PDF both read the report through
+ * `loadCheckReport`, so they always show the same thing. A report never goes
+ * away: moving findings to the client's app leaves it as it is.
  *
- * Until an agent has collated every part and posted the report
- * (`isReportPosted`, #648), no result is read at all: the client sees progress
- * only. Once posted and until paid, the hidden results' text is never read
- * from the database: only their severities and parts (for the counts) and the
- * title and description of the one worst result (the teaser). How to fix
- * stays hidden.
+ * - Until Ziki has posted the report (`isReportPosted`), no result is read at
+ *   all: the client sees progress, and the quick scan's short titles (which
+ *   are never findings: nothing in it can be paid for).
+ * - Once posted, the report is free (14 Nov call): every finding shows in
+ *   full. Clients pay only to have a finding fixed, by moving it to their app.
+ * - "How to fix" is only for a finding the client paid to have fixed (Hamzat,
+ *   14 Nov): for any other finding it is never read, so it can't reach the
+ *   page, the HTML or the PDF.
  */
 
 export type SeverityCounts = Record<SecuritySeverity, number>;
@@ -34,32 +37,28 @@ export type SeverityCounts = Record<SecuritySeverity, number>;
 /** One part of the check, as the client sees it on the progress screen. */
 export type ReportPart = { id: string; title: string; status: SecurityCheckItemStatus };
 
-/** A result in full: only ever built for a paid check. */
-export type FullResult = {
+/** One finding, as the client sees it. */
+export type ReportFinding = {
   id: string;
   severity: SecuritySeverity;
+  /** The part of the check that found it ("Login form"). */
+  area: string;
   title: string;
   description: string;
-  howToFix: string;
-  /** The agent that found it; null if it has since been removed. */
-  agent: ReportAgent | null;
-  /** Where its fix is, once it was sent with Fix on Ziki and became a private finding; null until then. */
+  /** Only for a finding the client paid to have fixed (moved to their app); null otherwise. */
+  howToFix: string | null;
+  /** Where its fix is, once it was moved to the client's app and became a private finding; null until then. */
   fix: ResultFix | null;
 };
 
-/** Where a sent problem's fix stands. "fixing" until its issue is Live ("fixed"), or closed or rejected ("closed"). */
 export type FixBucket = "fixing" | "fixed" | "closed";
 
-/** A sent problem's fix, read from its private finding (#security-findings): what the finding's own page shows. */
+/** A moved problem's fix, read from its private finding (#security-findings). */
 export type ResultFix = {
+  /** The private finding's page: where the mark links while there is no issue yet. */
   findingHref: string;
   bucket: FixBucket;
-  /** The issue's step (Ziki's status words and colours); null before the idea becomes an issue. */
-  substatus: Substatus | null;
-  /** The stage in words while there is no issue: "Reported", "Waiting for verdicts", "Rejected", "Archived". */
-  stageLabel: string | null;
   issue: { number: number; href: string } | null;
-  pullRequestHref: string | null;
   /** The latest independent re-check (Independent verification on the finding's page). */
   recheck: { passed: boolean; by: string | null } | null;
 };
@@ -67,7 +66,7 @@ export type ResultFix = {
 type FindingRow = {
   id: string;
   project: { slug: string; organisation: { slug: string } };
-  bug: { number: number; status: Status; substatus: Substatus; pullRequestUrl: string | null; isDeleted: boolean } | null;
+  bug: { number: number; status: Status; isDeleted: boolean } | null;
   idea: { status: IdeaStatus; isDeleted: boolean } | null;
   verifications: { passed: boolean; reviewer: { name: string | null } | null }[];
 };
@@ -84,22 +83,10 @@ export function fixOf(finding: FindingRow | null): ResultFix | null {
       : bug?.status === "closed" || (!bug && (idea?.status === "rejected" || idea?.status === "archived"))
         ? "closed"
         : "fixing";
-  const stageLabel = bug
-    ? null
-    : idea?.status === "open"
-      ? "Waiting for verdicts"
-      : idea?.status === "rejected"
-        ? "Rejected"
-        : idea?.status === "archived"
-          ? "Archived"
-          : "Reported";
   return {
     findingHref: `/security/findings/${finding.id}`,
     bucket,
-    substatus: bug?.substatus ?? null,
-    stageLabel,
     issue: bug ? { number: bug.number, href: issuePath(refOf(finding.project), bug.number) } : null,
-    pullRequestHref: bug?.pullRequestUrl ? safeHref(bug.pullRequestUrl) : null,
     recheck: latest ? { passed: latest.passed, by: latest.reviewer?.name ?? null } : null,
   };
 }
@@ -109,7 +96,7 @@ const FINDING_OF_RESULT = {
     select: {
       id: true,
       project: { select: { slug: true, organisation: { select: { slug: true } } } },
-      bug: { select: { number: true, status: true, substatus: true, pullRequestUrl: true, isDeleted: true } },
+      bug: { select: { number: true, status: true, isDeleted: true } },
       idea: { select: { status: true, isDeleted: true } },
       verifications: {
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -120,16 +107,9 @@ const FINDING_OF_RESULT = {
   },
 } satisfies Prisma.SecurityCheckResultSelect;
 
-/** The one result an unpaid client sees: no how to fix. */
-export type TeaserResult = { id: string; severity: SecuritySeverity; title: string; description: string; agent: ReportAgent | null };
-
-/** Who found a problem, enough to draw its Ziki avatar. */
-export type ReportAgent = { id: string; name: string; avatar: string | null };
-
 type ReportBase = {
   checkId: string;
   status: SecurityCheckStatus;
-  priceCoins: number;
   createdAt: Date;
   startedAt: Date | null;
   finishedAt: Date | null;
@@ -137,22 +117,28 @@ type ReportBase = {
   target: { id: string; kind: SecurityTargetKind; value: string; input: string; verified: boolean };
   parts: ReportPart[];
   progress: { done: number; total: number; percent: number };
-  /** How many different agents worked on the parts. */
-  agentCount: number;
-  /** Finished parts that found nothing, by title. */
-  clearParts: string[];
-  counts: SeverityCounts;
-  total: number;
 };
 
 /**
- * `posted`: whether the report is posted; before that there are no results at
- * all. `summary` is the collating agent's summary of everything found: paid
- * only, since it talks about the hidden problems too.
+ * Before the report is posted: progress, and the quick scan run when the asset
+ * was added (`SecurityTarget.previewSummary`), shown first on the scan's page
+ * until the agents' report replaces it. Nothing about the agents' results.
  */
-export type CheckReport =
-  | (ReportBase & { posted: true; paid: true; summary: string | null; results: FullResult[] })
-  | (ReportBase & { posted: boolean; paid: false; teaser: TeaserResult | null; hiddenCount: number });
+export type UnpostedReport = ReportBase & { posted: false; quickScan: PreviewSummary | null };
+
+/** The posted report: Ziki's summary, then every finding worst first. */
+export type PostedReport = ReportBase & {
+  posted: true;
+  /** Ziki AI's plain summary. */
+  summary: string | null;
+  findings: ReportFinding[];
+  counts: SeverityCounts;
+  total: number;
+  /** Finished parts that found nothing, by title. */
+  clearParts: string[];
+};
+
+export type CheckReport = UnpostedReport | PostedReport;
 
 /** Lower is worse: critical first. */
 function severityRank(severity: SecuritySeverity): number {
@@ -188,8 +174,6 @@ export function clearPartTitles(parts: readonly ReportPart[], results: readonly 
   return parts.filter((part) => part.status === "done" && !withResults.has(part.id)).map((part) => part.title);
 }
 
-const AGENT_OF_RESULT = { item: { select: { agent: { select: { id: true, name: true, avatar: true } } } } } as const;
-
 /**
  * The report for one check, or null when the check doesn't exist, belongs to
  * another workspace, or was asked for by someone else: each check is its
@@ -201,28 +185,26 @@ export async function loadCheckReport(checkId: string, organisationId: string, u
     select: {
       id: true,
       status: true,
-      paidAt: true,
       postedAt: true,
       summary: true,
-      priceCoins: true,
       createdAt: true,
       startedAt: true,
       finishedAt: true,
-      target: { select: { id: true, kind: true, value: true, input: true, verifiedAt: true } },
+      target: { select: { id: true, kind: true, value: true, input: true, verifiedAt: true, previewSummary: true } },
       items: {
         where: { kind: "check" },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-        select: { id: true, title: true, status: true, agentId: true },
+        select: { id: true, title: true, status: true },
       },
     },
   });
   if (!check) return null;
 
   const parts = check.items.map(({ id, title, status }) => ({ id, title, status }));
-  const base = {
+  const base: ReportBase = {
     checkId: check.id,
-    status: check.status,
-    priceCoins: check.priceCoins,
+    // While ownership proof is off (14 Nov plan), a check still marked as waiting for it is simply waiting to start.
+    status: check.status === "awaiting_ownership" && isTargetProven(check.target) ? "queued" : check.status,
     createdAt: check.createdAt,
     startedAt: check.startedAt,
     finishedAt: check.finishedAt,
@@ -235,73 +217,52 @@ export async function loadCheckReport(checkId: string, organisationId: string, u
     },
     parts,
     progress: partsProgress(parts),
-    agentCount: new Set(check.items.map((item) => item.agentId).filter(Boolean)).size,
   };
 
-  // Not posted yet: progress only, so no result is read, not even a count.
-  if (!isReportPosted(check)) {
-    return {
-      ...base,
-      posted: false,
-      paid: false,
-      clearParts: [],
-      counts: countBySeverity([]),
-      total: 0,
-      teaser: null,
-      hiddenCount: 0,
-    };
-  }
+  // Not posted yet: progress and the quick scan only, so no result is read, not even a count.
+  if (!isReportPosted(check)) return { ...base, posted: false, quickScan: readQuickScan(check.target.previewSummary) };
 
-  if (isCheckPaid(check)) {
-    const rows = await prisma.securityCheckResult.findMany({
-      where: { checkId: check.id },
-      select: { id: true, itemId: true, severity: true, title: true, description: true, howToFix: true, createdAt: true, ...AGENT_OF_RESULT, ...FINDING_OF_RESULT },
-    });
-    return {
-      ...base,
-      posted: true,
-      paid: true,
-      summary: check.summary,
-      clearParts: clearPartTitles(parts, rows),
-      counts: countBySeverity(rows),
-      total: rows.length,
-      results: worstFirst(rows).map((row) => ({
-        id: row.id,
-        severity: row.severity,
-        title: row.title,
-        description: row.description,
-        howToFix: row.howToFix,
-        agent: row.item.agent ?? null,
-        fix: fixOf(row.finding),
-      })),
-    };
-  }
-
-  // Unpaid: read only what the teaser needs. Severities and parts for the
-  // counts, then the worst result's title and description, never anyone's
-  // how to fix.
+  // Every finding, in full: the report is free.
   const rows = await prisma.securityCheckResult.findMany({
     where: { checkId: check.id },
-    select: { id: true, itemId: true, severity: true, createdAt: true },
+    select: {
+      id: true,
+      itemId: true,
+      severity: true,
+      createdAt: true,
+      title: true,
+      description: true,
+      ...FINDING_OF_RESULT,
+      item: { select: { title: true } },
+    },
   });
-  const [worst] = worstFirst(rows);
-  const found = worst
-    ? await prisma.securityCheckResult.findUnique({
-        where: { id: worst.id },
-        select: { id: true, severity: true, title: true, description: true, ...AGENT_OF_RESULT },
-      })
-    : null;
-  const teaser = found
-    ? { id: found.id, severity: found.severity, title: found.title, description: found.description, agent: found.item.agent ?? null }
-    : null;
+  // "How to fix" only for the findings the client paid to have fixed.
+  const paid = rows.filter((row) => fixOf(row.finding)).map((row) => row.id);
+  const howToFix = paid.length
+    ? new Map(
+        (
+          await prisma.securityCheckResult.findMany({ where: { id: { in: paid } }, select: { id: true, howToFix: true } })
+        ).map((row) => [row.id, row.howToFix]),
+      )
+    : new Map<string, string>();
+
   return {
     ...base,
     posted: true,
-    paid: false,
-    clearParts: clearPartTitles(parts, rows),
+    summary: check.summary,
     counts: countBySeverity(rows),
     total: rows.length,
-    teaser,
-    hiddenCount: teaser ? rows.length - 1 : rows.length,
+    clearParts: clearPartTitles(parts, rows),
+    findings: worstFirst(rows).map(
+      (row): ReportFinding => ({
+        id: row.id,
+        severity: row.severity,
+        area: row.item.title,
+        title: row.title,
+        description: row.description,
+        howToFix: howToFix.get(row.id) ?? null,
+        fix: fixOf(row.finding),
+      }),
+    ),
   };
 }

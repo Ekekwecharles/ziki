@@ -1,6 +1,7 @@
 import { isFormerNameOf } from "@/lib/github/former-repos";
 import { parsePullRequestUrl, sameRepo, type RepoRef } from "@/lib/github/pull-request-url";
 import { MERGE_CONFLICT_MESSAGE } from "@/lib/agent-api/merge-conflict";
+import { sameCommit } from "@/lib/github/commit-sha";
 
 /**
  * The one rule over an issue's pull request (#pr-reports).
@@ -144,7 +145,7 @@ export function prGate(report: GateReport | null, issue: GateIssue): PrGate {
     }
     case "open": {
       const open = { ...CLOSED, canDeliver: true, broken: null };
-      if (report.headSha && issue.pullRequestHeadSha && report.headSha !== issue.pullRequestHeadSha) {
+      if (report.headSha && issue.pullRequestHeadSha && !sameCommit(report.headSha, issue.pullRequestHeadSha)) {
         return { ...open, needsReport: true, reason: `The head moved since the last report (reported ${report.headSha.slice(0, 7)}, now ${issue.pullRequestHeadSha.slice(0, 7)}). ${REPORT_HOW}` };
       }
       if (report.mergeable === false) {

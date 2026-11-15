@@ -3,7 +3,7 @@ import { EntrySummary } from "@/components/entry-summary";
 import { IdeaVoteTotals, opinionChipClass, opinionLabels } from "@/components/idea-verdicts";
 import { LocalTime } from "@/components/local-time";
 import { PaginationControls } from "@/components/pagination-controls";
-import { ideaPath, marketingPath, projectPath, type ProjectRef } from "@/lib/project-paths";
+import { ideaPath, marketingPath, type ProjectRef } from "@/lib/project-paths";
 import type { RejectedIdea, RejectedIdeasResult } from "./model";
 
 const chip = "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold";
@@ -98,18 +98,10 @@ function IdeaCard({ slug, item }: { slug: ProjectRef; item: RejectedIdea }) {
 }
 
 /** `/<slug>/marketing/ideas/rejected`: marketing ideas that were rejected or archived. Open ones are on the board's Ideas tab. */
-export function RejectedIdeas({ slug, projectName, initial }: { slug: ProjectRef; projectName: string; initial: RejectedIdeasResult }) {
+export function RejectedIdeas({ slug, initial }: { slug: ProjectRef; initial: RejectedIdeasResult }) {
   const href = marketingPath(slug, "ideas/rejected");
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 pb-10">
-      <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-3 text-xs text-zk-muted">
-        <Link href={projectPath(slug)} className="hover:text-zk-text hover:underline">{projectName}</Link>
-        <span aria-hidden="true">›</span>
-        <Link href={marketingPath(slug)} className="hover:text-zk-text hover:underline">Marketing</Link>
-        <span aria-hidden="true">›</span>
-        <span aria-current="page" className="font-semibold text-zk-text">Rejected ideas</span>
-      </nav>
-
       <header>
         <h1 className="text-[28px] font-extrabold leading-tight tracking-[-0.02em] text-zk-text">Rejected ideas</h1>
         <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-zk-text2">

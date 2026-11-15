@@ -4,6 +4,7 @@ import { solverReward } from "./project-rewards";
 import { pointsMultiplierFor, scaledPoints } from "./multiplier";
 import { getPlatformRewardConfig } from "./platform-rewards";
 import { reportedClosedUnmerged } from "@/lib/agent-api/pull-request-report";
+import { guestHomeFor } from "@/lib/agents/guest-access";
 
 /**
  * Writes points to the ledger (#428). The backfill (#435), the merge gate
@@ -40,10 +41,18 @@ export type PointAward = {
   exact?: boolean;
 };
 
-/** Writes `entry` unless an entry with its `sourceKey` exists. True if it was written. */
+/**
+ * Writes `entry` unless an entry with its `sourceKey` exists. True if it was written.
+ *
+ * On-call guests (12 Nov plan, D2): points a guest earns in a workspace it is
+ * (or was) visiting land in its home workspace instead, where its owner is a
+ * member and can see and withdraw them. They are scaled by the home
+ * workspace's multiplier, since that is where they're paid.
+ */
 export async function award(db: Db, entry: PointAward): Promise<boolean> {
-  const { exact, ...row } = entry;
-  const multiplier = exact ? 1 : await pointsMultiplierFor(db, entry.organisationId);
+  const home = await guestHomeFor(db, entry);
+  const { exact, ...row } = home ? { ...entry, organisationId: home } : entry;
+  const multiplier = exact ? 1 : await pointsMultiplierFor(db, row.organisationId);
   const { count } = await db.pointEntry.createMany({
     data: [{ ...row, points: scaledPoints(entry.points, multiplier) }],
     skipDuplicates: true,

@@ -7,8 +7,8 @@
  *
  * - a website still waiting for its owner to prove it is theirs
  * - a website mid-check and unpaid: some parts done, problems found so far
- * - a repo finished and paid: the full report, with two problems already sent
- *   to Ziki as findings (one Live and checked again, one In progress)
+ * - a repo finished and paid: the full report, with two problems already moved
+ *   to the client's app (one Live and checked again, one In progress)
  * - a server finished and unpaid with no critical problem: the teaser shows
  *   the worst one found instead
  *
@@ -20,6 +20,8 @@
  * prints each check's address.
  */
 import { PrismaClient, type SecurityCheckItemStatus, type SecurityCheckStatus, type SecuritySeverity, type SecurityTargetKind } from "@prisma/client";
+import { SEVERITY_PRICE } from "../../lib/security-checks";
+import type { PreviewSummary } from "../../lib/security-checks/preview-summary";
 
 const ORGANISATION_SLUG = "demo";
 const OWNER_EMAIL = "demo@fixtures.local";
@@ -47,10 +49,36 @@ type Scenario = {
   verified: boolean;
   status: SecurityCheckStatus;
   paid: boolean;
-  /** The collating agent's summary; a done check is posted with it (#648). */
+  /** Ziki's summary; a done check is posted with it. The page shows one line, the PDF all of it. */
   summary?: string;
+  /** How many of its first parts' problems the client has unlocked (12 Nov plan: per-finding unlocks). */
+  unlockParts?: number;
+  /** The quick scan saved when the asset was added (14 Nov plan): shown on the report until it is posted. */
+  quickScan?: PreviewSummary;
   parts: Part[];
 };
+
+/** A website's quick scan: two short titles, as any browser could see them. */
+function websiteQuickScan(target: string): PreviewSummary {
+  return {
+    kind: "website",
+    target,
+    checkedAt: "2026-11-14T09:00:00.000Z",
+    total: 2,
+    counts: { critical: 0, high: 0, medium: 1, low: 1 },
+    risk: "medium",
+    areas: [
+      { area: "https", label: "HTTPS", problems: 0 },
+      { area: "certificate", label: "Certificate", problems: 0 },
+      { area: "headers", label: "Security headers", problems: 1 },
+      { area: "cookies", label: "Cookies", problems: 1 },
+    ],
+    rows: [
+      { severity: "medium", area: "cookies", price: SEVERITY_PRICE.medium, label: "Cookies", title: "Session cookie can be read by scripts" },
+      { severity: "low", area: "headers", price: SEVERITY_PRICE.low, label: "Security headers", title: "No Strict-Transport-Security header" },
+    ],
+  };
+}
 
 const LOGIN_RATE_LIMIT: Problem = {
   severity: "critical",
@@ -61,14 +89,14 @@ const LOGIN_RATE_LIMIT: Problem = {
 const MISSING_HSTS: Problem = {
   severity: "low",
   title: "No Strict-Transport-Security header",
-  description: "Browsers are not told to always use HTTPS for this site, so a first visit over plain HTTP can be intercepted.",
-  howToFix: "Send `Strict-Transport-Security: max-age=31536000; includeSubDomains` on every HTTPS response.",
+  description: "Browsers are not told to always use HTTPS for this site, so a first visit over plain HTTP can be intercepted. Every HTTPS response was checked and none sends a `Strict-Transport-Security` header. Someone on the same Wi-Fi as a visitor could catch that first plain request and send them to a fake copy of the site before the redirect to HTTPS happens.",
+  howToFix: "Send `Strict-Transport-Security: max-age=31536000; includeSubDomains` on every HTTPS response. Start with a short `max-age` (for example one day), check nothing breaks, then raise it to a year. Once it has run for a while, you can add the site to the browsers' preload list.",
 };
 const VERBOSE_ERRORS: Problem = {
   severity: "medium",
   title: "Error pages show stack traces",
-  description: "A malformed request returns the full stack trace, which reveals file paths and library versions.",
-  howToFix: "Show a plain error page in production and log the details on the server only.",
+  description: "A malformed request returns the full stack trace, which reveals file paths and library versions. Sending `/api/plans?id=abc` returns a 500 page listing the server's folders, the framework version and the database driver. An attacker can use those versions to look up known weaknesses that match them exactly.",
+  howToFix: "Show a plain error page in production and log the details on the server only. Turn off debug output in the production settings, and return a short message such as \"Something went wrong\" with an error id the client can quote to support.",
 };
 
 const SCENARIOS: Scenario[] = [
@@ -81,17 +109,19 @@ const SCENARIOS: Scenario[] = [
     verified: false,
     status: "awaiting_ownership",
     paid: false,
+    quickScan: websiteQuickScan("shop.example.test"),
     parts: [],
   },
   {
     key: "checking",
-    label: "Mid-check, unpaid",
+    label: "Mid-check",
     kind: "website",
     input: "blog.example.test",
     value: "blog.example.test",
     verified: true,
     status: "checking",
     paid: false,
+    quickScan: websiteQuickScan("blog.example.test"),
     parts: [
       { title: "Login form: rate limits", status: "done", problems: [LOGIN_RATE_LIMIT] },
       { title: "Security headers", status: "done", problems: [MISSING_HSTS] },
@@ -116,7 +146,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     key: "paid",
-    label: "Finished, paid",
+    label: "Finished, 2 moved to the app",
     kind: "repo",
     input: "https://github.com/acme/web-app",
     value: "acme/web-app",
@@ -124,7 +154,8 @@ const SCENARIOS: Scenario[] = [
     status: "done",
     paid: true,
     summary:
-      "We found 4 problems in acme/web-app. Start with the live payment key committed in config: revoke it today and issue a new one. Then fix the search query, which lets crafted input change the SQL. The other two (stack traces on error pages and a missing HSTS header) are quick to fix.",
+      "We checked 6 parts of acme/web-app and found 4 problems: 1 critical, 1 high, 1 medium and 1 low. Start with the critical one: a live payment key is in the code, so anyone with the repository can use it. The medium and low ones are quick to fix and can follow this week.",
+    unlockParts: 2,
     parts: [
       {
         title: "Secrets committed to the repository",
@@ -132,8 +163,8 @@ const SCENARIOS: Scenario[] = [
         problems: [{
           severity: "critical",
           title: "Live payment key committed in config",
-          description: "`config/payments.ts` holds a live payment API key in plain text, readable by anyone with access to the repository.",
-          howToFix: "Revoke the key now, issue a new one, load it from an environment variable, and remove it from the git history.",
+          description: "`config/payments.ts` holds a live payment API key in plain text, readable by anyone with access to the repository. The key starts with `sk_live_`, so it works against real payments, not a test account. It has been in the code since the first commit, so everyone who ever cloned the repository has a copy, and anyone with it can issue refunds or read customers' payment history.",
+          howToFix: "Revoke the key now in the payment provider's dashboard and issue a new one. Load the new key from an environment variable (for example `PAYMENTS_SECRET_KEY`) and never commit it. Then remove the old key from the git history, and add a secret scanner to CI so it can't happen again.",
         }],
       },
       {
@@ -142,8 +173,8 @@ const SCENARIOS: Scenario[] = [
         problems: [{
           severity: "high",
           title: "Search query built by joining strings",
-          description: "`lib/search.ts` puts the search text straight into a SQL string, so crafted input can change the query.",
-          howToFix: "Use parameterised queries (placeholders) instead of joining the user's text into the SQL.",
+          description: "`lib/search.ts` puts the search text straight into a SQL string, so crafted input can change the query. Searching for `' OR '1'='1` returned every row in the products table, including hidden ones. The same pattern could be used to read other tables, such as users and their password hashes.",
+          howToFix: "Use parameterised queries (placeholders) instead of joining the user's text into the SQL. In `lib/search.ts`, pass the search text as a parameter to the query rather than adding it to the string, and check the other queries in `lib/` for the same pattern.",
         }],
       },
       { title: "Dependency versions", status: "done", problems: [VERBOSE_ERRORS] },
@@ -154,7 +185,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     key: "no-critical",
-    label: "Finished, unpaid, no critical",
+    label: "Finished, none moved yet",
     kind: "server",
     input: "203.0.113.10",
     value: "203.0.113.10",
@@ -162,7 +193,7 @@ const SCENARIOS: Scenario[] = [
     status: "done",
     paid: false,
     summary:
-      "We found 3 problems on 203.0.113.10. The database port is open to the internet: close it first. The other two are smaller.",
+      "We checked 4 parts of 203.0.113.10 and found 3 problems: 1 high, 1 medium and 1 low. Start with the high one.",
     parts: [
       {
         title: "Open ports",
@@ -221,6 +252,7 @@ async function main() {
           ownershipToken: `${P}-token-${scenario.key}`,
           ownershipMethod: scenario.verified ? "dns_txt" : null,
           verifiedAt: scenario.verified ? new Date(now - 3 * HOUR) : null,
+          previewSummary: scenario.quickScan ?? undefined,
         },
       });
       await db.securityCheck.create({
@@ -231,6 +263,7 @@ async function main() {
           requestedById: owner.id,
           status: scenario.status,
           priceCoins: 50,
+          free: true,
           paidAt: scenario.paid ? new Date(now - 90 * MIN) : null,
           startedAt: scenario.verified ? started : null,
           finishedAt: scenario.status === "done" ? new Date(now - 30 * MIN) : null,
@@ -278,6 +311,8 @@ async function main() {
               checkId,
               itemId,
               ...problem,
+              priceCoins: SEVERITY_PRICE[problem.severity],
+              unlockedAt: index < (scenario.unlockParts ?? 0) ? new Date(now - 20 * MIN) : null,
               createdAt: new Date(createdAt.getTime() + 20 * MIN),
             },
           });

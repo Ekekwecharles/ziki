@@ -57,7 +57,7 @@ export default async function UnlockFixesPage({
     <div className="mx-auto flex w-full max-w-[560px] flex-col pb-12 pt-2">
       <Link href={back} className="inline-flex w-fit items-center gap-1.5 text-sm text-zk-text2 hover:text-zk-text">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6" /></svg>
-        Sites
+        Assets
       </Link>
 
       <p className="mb-0 mt-8 text-sm text-zk-muted">Step 3 of 3 · Fix</p>
@@ -65,7 +65,7 @@ export default async function UnlockFixesPage({
         Unlock fixes for <span className="break-all">{site}</span>
       </h1>
       <p className="mb-0 mt-2 text-[15px] leading-relaxed text-zk-text2">
-        The scan was free. Unlock a finding to see what&apos;s wrong in full and how to fix it. You pay per finding, by how serious it is.
+        Unlock a finding to see what&apos;s wrong in full and how to fix it. You pay per finding, by how serious it is.
       </p>
 
       <div className="mt-6 flex items-center gap-3">
@@ -84,10 +84,10 @@ export default async function UnlockFixesPage({
             <p className="m-0 font-semibold text-zk-text">The report isn&apos;t ready yet</p>
             <p className="m-0 mt-1 text-sm text-zk-text2">
               {check.status === "awaiting_ownership"
-                ? `Show ${site} is yours first, then your free scan starts.`
+                ? `Show ${site} is yours first, then the scan starts.`
                 : `Status: ${CHECK_STATUS_LABEL[check.status]}. You can unlock fixes once the report is posted.`}
             </p>
-            <Link href={back} className="mt-3 inline-flex text-sm font-semibold text-zk-accent hover:underline">Back to sites</Link>
+            <Link href={back} className="mt-3 inline-flex text-sm font-semibold text-zk-accent hover:underline">Back to assets</Link>
           </div>
         ) : rows.length === 0 ? (
           <div role="status" className="rounded-2xl border border-zk-border bg-zk-surface px-5 py-4">

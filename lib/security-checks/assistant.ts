@@ -41,11 +41,11 @@ const SYSTEM = `You are Ziki's security assistant, on the Security page of Ziki 
 
 Your one job is to find out what the client wants secured and get its address:
 - If they haven't given an address yet, ask for it: their website (like yourshop.com), a server address, or a GitHub repo.
-- When they give one, set "target" to it and say the next step is to show it's theirs, after which their first scan starts. Their first scan is free.
+- When they give one, set "target" to it and say the next step is to show it's theirs, after which the scan starts.
 - Answer short questions about how checking with Ziki works, using only what is written here. If you don't know, say a person on the Ziki team can help.
-- If they ask about anything else, say you can only help them check a site with Ziki, and ask what they want to secure.
+- If they ask about anything else, say you can only help them secure their website, server or code with Ziki, and ask what they want to secure.
 
-Never say a scan has started or finished, and never invent findings, prices or features. Write plainly, in the language the client uses, in one or two short sentences.`;
+Never say a scan has started or finished, and never invent findings, prices or features. Don't talk about prices, payment or anything being free: if asked, say they only pay to unlock a fix, once the report is ready. Write plainly, in the language the client uses, in one or two short sentences.`;
 
 /** Ask the assistant for its next reply, or null if it can't answer now. */
 export async function askSecurityAssistant(history: AssistantTurn[]): Promise<AssistantReply | null> {
@@ -86,3 +86,44 @@ export async function askSecurityAssistant(history: AssistantTurn[]): Promise<As
     return null;
   }
 }
+
+const SITE_SYSTEM = `You are Ziki's security assistant, in the chat under one site's scan on Ziki's Security page (ziki.dev). The client asks about that site's scan. What you know about it is below; it is all you know.
+
+- Explain what the quick browser scan found in plain words: what each problem means and why it matters, in a sentence or two.
+- The quick scan only sees what any browser sees. Ziki's agents check much more (login, forms, code, server); their report has every finding in full, with how to fix it, and the client unlocks each fix there.
+- Don't give step-by-step fixes or code: say the fix comes with the agents' report.
+- Never invent findings, numbers or features, and don't talk about prices: if asked, say they only pay to unlock a fix once the report is ready.
+- If they ask about anything that isn't this site's security, say you can only help with this site here, and that "+ Add asset" scans another one.
+Write plainly, in the client's language, in two or three short sentences.`;
+
+/** Answer a question about one site's scan, from the saved history and what's known about the site, or null. */
+export async function askAboutSite(history: AssistantTurn[], context: string): Promise<string | null> {
+  const apiKey = process.env.ZIKI_CLAUDE_API_KEY?.trim();
+  const turns = history
+    .filter((turn) => turn.text.trim())
+    .slice(-20)
+    .map((turn) => ({ role: turn.role, content: turn.text.slice(0, ASSISTANT_MESSAGE_MAX) }));
+  while (turns.length && turns[0].role !== "user") turns.shift();
+  if (!apiKey || turns.length === 0 || turns[turns.length - 1].role !== "user") return null;
+
+  const client = new Anthropic({ apiKey, timeout: 20_000, maxRetries: 1 });
+  try {
+    const response = await client.beta.messages.create({
+      model: MODEL,
+      max_tokens: 600,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      output_config: { effort: "low" },
+      system: `${SITE_SYSTEM}\n\nWhat's known about this site:\n${context}`,
+      messages: turns,
+    });
+    if (response.stop_reason === "refusal") return null;
+    const text = response.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("").trim();
+    return text ? text.slice(0, 1200) : null;
+  } catch (error) {
+    if (error instanceof Anthropic.APIError) logger.error(`[security-assistant] site chat: Claude API error ${error.status}.`);
+    else logger.error("[security-assistant] site chat failed.", error);
+    return null;
+  }
+}
+

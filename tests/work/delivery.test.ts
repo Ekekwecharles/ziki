@@ -8,9 +8,20 @@ import type { AgentContext } from "@/lib/agents/require-agent";
 const PR = "https://github.com/emerjent/ziki/pull/615";
 
 const db = vi.hoisted(() => {
+  const project = { findFirst: vi.fn(), findUnique: vi.fn() };
+  const outsideWorkImport = { findUnique: vi.fn(), create: vi.fn() };
+  const expressImportGrant = { findUnique: vi.fn() };
   const tx = {
+    project, outsideWorkImport, expressImportGrant,
+    $queryRaw: vi.fn(),
+    agent: { findUnique: vi.fn() },
+    agentApiKey: { findUnique: vi.fn() },
+    issueClaim: { findFirst: vi.fn() },
+    agentActivation: { findUnique: vi.fn() },
+    membership: { findUnique: vi.fn() },
+    pullRequestReport: { create: vi.fn() },
     delivery: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
-    bug: { update: vi.fn(), updateMany: vi.fn() },
+    bug: { update: vi.fn(), updateMany: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), create: vi.fn() },
     agentAuditEvent: { update: vi.fn() },
     testVerdict: { updateMany: vi.fn() },
     bugActivity: { create: vi.fn() },
@@ -19,6 +30,8 @@ const db = vi.hoisted(() => {
   return {
     tx,
     prisma: {
+      agent: { findFirst: vi.fn() },
+      project, outsideWorkImport, expressImportGrant,
       bug: { findFirst: vi.fn(), findUnique: vi.fn() },
       issueClaim: { findFirst: vi.fn() },
       reviewOffer: { findFirst: vi.fn() },
@@ -33,19 +46,32 @@ const db = vi.hoisted(() => {
 vi.mock("@/lib/prisma", () => ({ prisma: db.prisma }));
 
 const mocks = vi.hoisted(() => ({
+  requireUser: vi.fn(), consumeBudget: vi.fn(), checkSecrets: vi.fn(),
+  readPullRequest: vi.fn(),
+  finalizeResolved: vi.fn(),
   audit: vi.fn(),
   publish: vi.fn(),
   createReviewOffers: vi.fn(async () => ({ offers: [] })),
   strandedDelivery: vi.fn(),
   refreshJudgedStatus: vi.fn(),
 }));
+vi.mock("@/lib/auth-helpers", () => ({ requireUser: mocks.requireUser }));
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("@/lib/agents/rate-budget", () => ({ consumeAgentBudget: mocks.consumeBudget }));
+vi.mock("@/lib/security/secret-guard", () => ({ checkPostForSecrets: mocks.checkSecrets, stringsIn: (value: unknown) => [{ field: "body", text: JSON.stringify(value) }] }));
 vi.mock("@/lib/agents/audit", () => ({ audit: mocks.audit }));
 vi.mock("@/lib/agent-api/events", () => ({ publish: mocks.publish }));
 vi.mock("@/lib/agent-api/review-offer", () => ({ createReviewOffers: mocks.createReviewOffers }));
 vi.mock("@/lib/agent-api/stranded-delivery", () => ({ STRANDED_AFTER_MS: 2 * 60 * 60 * 1000, strandedDelivery: mocks.strandedDelivery }));
 vi.mock("@/lib/agent-api/tested-status", () => ({ refreshJudgedStatus: mocks.refreshJudgedStatus }));
+vi.mock("@/lib/github/client", () => ({ githubClientFor: vi.fn(async () => ({})), GitHubError: class extends Error {} }));
+vi.mock("@/lib/github/pull-request-snapshot", () => ({ readPullRequest: mocks.readPullRequest }));
+vi.mock("@/lib/agent-api/merge", () => ({ finalizeResolved: mocks.finalizeResolved }));
 
 import { deliverWork } from "@/lib/agent-api/delivery";
+import { importOutsideWork, outsideWorkSchema } from "@/lib/agent-api/outside-work";
+import { outsideWorkPullRequest } from "@/lib/outside-work";
+import { importOutsideWorkAction } from "@/app/actions/import-outside-work";
 
 const agent = (level: AgentContext["level"], ownerId = "dana"): AgentContext => ({
   agentId: `agent-${ownerId}`,
@@ -66,7 +92,174 @@ const body = (pullRequestUrl = PR) => ({
 
 const stranded = { pullRequestUrl: PR, creditedUserId: "ada", linkedAt: new Date("2026-10-01T10:00:00Z"), goodVerdicts: 2, needed: 2 };
 
+describe("outside-board imports (#788)", () => {
+  const input = () => ({ title: "Fix Save", ...body() });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.requireUser.mockResolvedValue({ id: "ada", role: "user" });
+    mocks.consumeBudget.mockResolvedValue({ allowed: true });
+    mocks.checkSecrets.mockResolvedValue({ ok: true });
+    const project = { organisationId: "t1", slug: "web", organisation: { slug: "acme" }, archivedAt: null, repoUrl: "https://github.com/emerjent/ziki", githubInstallationId: null, repositories: [] };
+    db.prisma.project.findFirst.mockResolvedValue(project);
+    db.prisma.project.findUnique.mockResolvedValue(project);
+    db.prisma.expressImportGrant.findUnique.mockResolvedValue({ agentId: "agent-ada", projectId: "p1" });
+    db.prisma.outsideWorkImport.findUnique.mockResolvedValue(null);
+    db.tx.agent.findUnique.mockResolvedValue({ ownerUserId: "ada", revokedAt: null, pausedAt: null });
+    db.tx.agentApiKey.findUnique.mockResolvedValue({ revokedAt: null });
+    db.tx.agentActivation.findUnique.mockResolvedValue({ deactivatedAt: null });
+    db.tx.membership.findUnique.mockResolvedValue({ id: "membership" });
+    db.tx.bug.findMany.mockResolvedValue([]);
+    db.tx.bug.create.mockResolvedValue({ id: "imported", number: 8, status: "done", substatus: "requires_review", pullRequestUrl: PR });
+    db.prisma.agent.findFirst.mockResolvedValue({ id: "agent-ada", name: "Ada's agent", username: "adas-agent", tagline: "Review carefully", about: "I test changes", pausedAt: null, _count: { skills: 1 }, activations: [{ level: "working", burst: false, burstUntil: null }], apiKeys: [{ id: "k1" }] });
+    mocks.readPullRequest.mockResolvedValue({
+      state: "open", url: PR, headSha: "abc1234", fetchedAt: "2026-11-12T20:00:00Z",
+      checksSummary: "passing", mergeable: true, inDefaultBranch: null, mergeCommitSha: null, baseRef: "main",
+    });
+  });
+
+  it("creates an attributed delivery at Requires review and asks reviewers, without a claim", async () => {
+    const result = await importOutsideWork(agent("working", "ada"), "p1", input(), "request-1");
+    expect(result).toMatchObject({ replayed: false, issue: { substatus: "requires_review" } });
+    expect(db.tx.bug.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      status: "done", substatus: "requires_review", assigneeId: "ada", createdByAgentId: "agent-ada", beneficiaryUserId: "ada",
+    }) }));
+    expect(db.tx.delivery.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ agentId: "agent-ada", beneficiaryUserId: "ada", headSha: "abc1234" }) }));
+    expect(mocks.createReviewOffers).toHaveBeenCalledWith(db.prisma, expect.objectContaining({ agentId: "agent-ada" }), "imported", expect.objectContaining({ pullRequestUrl: PR }));
+    expect(db.prisma.issueClaim.findFirst).not.toHaveBeenCalled();
+    expect(mocks.finalizeResolved).not.toHaveBeenCalled();
+  });
+  it("imports through the platform form for the signed-in owner's own agent", async () => {
+    expect(await importOutsideWorkAction("agent-ada", "p1", input(), "form-1")).toEqual({ ok: true, href: "/acme/web/8", number: 8 });
+    expect(db.prisma.agent.findFirst).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "agent-ada", ownerUserId: "ada", revokedAt: null } }));
+  });
+  it("returns useful form errors for missing evidence, unowned agents, denied grants and secrets", async () => {
+    expect(await importOutsideWorkAction("agent-ada", "p1", { ...input(), testResults: undefined }, "form-2")).toMatchObject({ ok: false, error: expect.stringContaining("Include screenshots or test results") });
+    db.prisma.agent.findFirst.mockResolvedValueOnce(null);
+    expect(await importOutsideWorkAction("agent-other", "p1", input(), "form-3")).toMatchObject({ ok: false, error: expect.stringContaining("your own active agent") });
+    db.prisma.expressImportGrant.findUnique.mockResolvedValue(null);
+    expect(await importOutsideWorkAction("agent-ada", "p1", input(), "form-4")).toMatchObject({ ok: false, error: expect.stringContaining("must grant this agent") });
+    mocks.checkSecrets.mockResolvedValue({ ok: false, message: "Remove the credential from this import." });
+    expect(await importOutsideWorkAction("agent-ada", "p1", input(), "form-5")).toMatchObject({ ok: false, error: "Remove the credential from this import." });
+    expect(db.tx.bug.create).not.toHaveBeenCalled();
+  });
+
+  it("imports a verified merged PR as Live through the held-payout path, without pre-merge testers", async () => {
+    mocks.readPullRequest.mockResolvedValue({ state: "merged", url: PR, headSha: "abc1234", fetchedAt: "2026-11-12T20:00:00Z", inDefaultBranch: true, mergeCommitSha: "def5678", baseRef: "main" });
+    const result = await importOutsideWork(agent("working", "ada"), "p1", input(), "request-2");
+    expect(result.issue).toMatchObject({ status: "resolved", substatus: "on_dev" });
+    expect(mocks.finalizeResolved).toHaveBeenCalledWith(db.tx, expect.objectContaining({
+      claim: null, solverUserId: "ada", solverAgentId: "agent-ada", rewardedReviewerUserIds: [], mergeCommitSha: "def5678",
+    }));
+    expect(mocks.createReviewOffers).not.toHaveBeenCalled();
+  });
+
+  it.each([false, null])("keeps merged work in Merge when default-branch inclusion is %s", async (inDefaultBranch) => {
+    mocks.readPullRequest.mockResolvedValue({ state: "merged", url: PR, fetchedAt: "2026-11-12T20:00:00Z", inDefaultBranch, baseRef: "staging" });
+    await importOutsideWork(agent("working", "ada"), "p1", input(), "request-3");
+    expect(db.tx.bug.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "merge", substatus: "ready_to_merge" }) }));
+    expect(mocks.finalizeResolved).not.toHaveBeenCalled();
+    expect(mocks.createReviewOffers).not.toHaveBeenCalled();
+  });
+
+  it("refuses an ungranted agent before querying GitHub", async () => {
+    db.prisma.expressImportGrant.findUnique.mockResolvedValue(null);
+    await expect(importOutsideWork(agent("merger", "ada"), "p1", input(), "request-4")).rejects.toMatchObject({ status: 403 });
+    expect(mocks.readPullRequest).not.toHaveBeenCalled();
+    expect(db.tx.bug.create).not.toHaveBeenCalled();
+  });
+
+  it("rechecks revocation after the GitHub request", async () => {
+    db.prisma.expressImportGrant.findUnique.mockResolvedValueOnce({}).mockResolvedValueOnce(null);
+    await expect(importOutsideWork(agent("working", "ada"), "p1", input(), "request-5")).rejects.toMatchObject({ status: 403 });
+    expect(db.tx.bug.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects a key revoked while GitHub was being read", async () => {
+    db.tx.agentApiKey.findUnique.mockResolvedValue({ revokedAt: new Date() });
+    await expect(importOutsideWork(agent("working", "ada"), "p1", input(), "revoked-key")).rejects.toMatchObject({ status: 403 });
+    expect(db.tx.bug.create).not.toHaveBeenCalled();
+  });
+
+  it.each(["closed", "not_found"])("rejects a %s PR without creating an issue", async (state) => {
+    mocks.readPullRequest.mockResolvedValue({ state });
+    await expect(importOutsideWork(agent("working", "ada"), "p1", input(), "request-6")).rejects.toMatchObject({ status: 422 });
+    expect(db.tx.bug.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unrelated repository before making a GitHub request", async () => {
+    await expect(importOutsideWork(agent("working", "ada"), "p1", { ...input(), pullRequestUrl: "https://github.com/another/repo/pull/1" }, "request-7")).rejects.toMatchObject({ status: 422 });
+    expect(mocks.readPullRequest).not.toHaveBeenCalled();
+  });
+
+  it("replays identical submissions without another delivery, network request or payout", async () => {
+    const { hashCreateRequest } = await import("@/lib/agent-api/create-policy");
+    const requestHash = hashCreateRequest({ ...input(), projectId: "p1", screenshots: [] });
+    db.prisma.outsideWorkImport.findUnique.mockResolvedValue({ requestHash, bug: { id: "existing", status: "resolved" } });
+    expect(await importOutsideWork(agent("working", "ada"), "p1", input(), "request-8")).toMatchObject({ replayed: true, issue: { id: "existing" } });
+    expect(mocks.readPullRequest).not.toHaveBeenCalled();
+    expect(mocks.finalizeResolved).not.toHaveBeenCalled();
+    expect(db.tx.bug.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses changed payloads under a used key and PRs already recorded on the board", async () => {
+    db.prisma.outsideWorkImport.findUnique.mockResolvedValueOnce({ requestHash: "different", bug: { id: "existing" } });
+    await expect(importOutsideWork(agent("working", "ada"), "p1", input(), "request-9")).rejects.toMatchObject({ status: 409 });
+    db.prisma.outsideWorkImport.findUnique.mockResolvedValue(null);
+    db.tx.bug.findMany.mockResolvedValue([{ id: "board-issue", pullRequestUrl: "https://github.com/EMERJENT/ZIKI/pull/615/files#diff" }]);
+    await expect(importOutsideWork(agent("working", "ada"), "p1", input(), "request-10")).rejects.toMatchObject({ status: 409 });
+    expect(db.tx.bug.create).not.toHaveBeenCalled();
+  });
+
+  it("requires evidence and a retry key, and does not accept a caller-selected status", async () => {
+    expect(outsideWorkSchema.safeParse({ ...input(), testResults: undefined }).success).toBe(false);
+    expect(outsideWorkSchema.safeParse({ ...input(), status: "resolved" }).success).toBe(false);
+    await expect(importOutsideWork(agent("working", "ada"), "p1", input(), null)).rejects.toMatchObject({ status: 400 });
+    expect(outsideWorkPullRequest("https://github.com/EMERJENT/ZIKI/pull/615/files?x=1#diff")?.url).toBe(PR);
+    expect(outsideWorkPullRequest("http://github.com/emerjent/ziki/pull/615")).toBeNull();
+  });
+});
+
 /** Issue #615: In progress, a pull request linked by hand, assigned to Ada, nobody holding a claim. */
+describe("revising an imported delivery after manager rejection (#788)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db.prisma.bug.findFirst.mockResolvedValue({ id: "bug1", projectId: "p1", status: "in_progress", substatus: "in_progress", pullRequestUrl: PR, outsideWork: { agentId: "agent-ada" }, project: { repoUrl: "https://github.com/emerjent/ziki" } });
+    db.prisma.issueClaim.findFirst.mockResolvedValue(null);
+    db.prisma.reviewOffer.findFirst.mockResolvedValue(null);
+    db.prisma.agentAuditEvent.findFirst.mockResolvedValue(null);
+    db.prisma.pullRequestReport.findFirst.mockResolvedValue(null);
+    db.tx.bug.findUnique.mockResolvedValue({ status: "in_progress", pullRequestUrl: PR, assigneeId: "ada" });
+    db.tx.issueClaim.findFirst.mockResolvedValue(null);
+    db.tx.delivery.findUnique.mockResolvedValue({ id: "d1" });
+    db.tx.delivery.update.mockResolvedValue({ id: "d1" });
+    db.prisma.delivery.findMany.mockResolvedValue([{ id: "d1", agentId: "agent-ada", beneficiaryUserId: "ada", summary: body().summary, description: body().description, pullRequestUrl: PR, screenshots: [], testResults: "passed", agent: { name: "Ada's agent" }, beneficiary: { name: "Ada" }, replies: [] }]);
+  });
+  it("lets the original importer revise its unclaimed delivery and sends it through review again", async () => {
+    expect(await deliverWork(agent("working", "ada"), "bug1", body())).toMatchObject({ status: 200, replaced: true, delivery: { agentId: "agent-ada" } });
+    expect(db.tx.bug.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "done", substatus: "requires_review" }) }));
+  });
+  it("an on-call guest's delivery doesn't end its stay: guests stay (14 Nov plan, D2)", async () => {
+    await deliverWork(agent("working", "ada"), "bug1", body());
+    const asMember = db.prisma.$transaction.mock.calls.length;
+    db.prisma.$transaction.mockClear();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(await deliverWork({ ...agent("working", "ada"), guest: true }, "bug1", body())).toMatchObject({ status: 200 });
+    // The same work as any agent's delivery, and nothing more: no extra transaction ends the stay.
+    expect(db.prisma.$transaction.mock.calls.length).toBe(asMember);
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
+  it("does not let another unclaimed agent replace that delivery", async () => {
+    expect(await deliverWork(agent("working", "bob"), "bug1", body())).toMatchObject({ status: 409, error: "no_claim" });
+    expect(db.tx.delivery.update).not.toHaveBeenCalled();
+  });
+  it("refuses a revision if a new holder appeared before the transaction locked the issue", async () => {
+    db.tx.issueClaim.findFirst.mockResolvedValue({ id: "new-holder" });
+    await expect(deliverWork(agent("working", "ada"), "bug1", body())).rejects.toMatchObject({ status: 409 });
+    expect(db.tx.delivery.update).not.toHaveBeenCalled();
+  });
+});
+
 function issue(overrides: { reporterId?: string } = {}) {
   db.prisma.bug.findFirst.mockResolvedValue({
     id: "bug1",

@@ -24,8 +24,10 @@ export async function releaseWorkOfRevokedAgent(
   withdrawnBids: number;
 }> {
   const { agentId, organisationId, actorUserId, now } = input;
+  // Only this organisation's work: every caller hands back one organisation at a time, and an
+  // on-call guest removed from a client's workspace keeps its work at home.
   const open = await tx.issueClaim.findMany({
-    where: { agentId, releasedAt: null, status: { in: ["offered", "planning", "active"] } },
+    where: { agentId, releasedAt: null, status: { in: ["offered", "planning", "active"] }, bug: { organisationId } },
     select: { id: true, bugId: true },
     orderBy: { bugId: "asc" },
   });
@@ -91,7 +93,7 @@ export async function releaseWorkOfRevokedAgent(
   }
 
   const withdrawn = await tx.issueBid.updateMany({
-    where: { agentId, withdrawnAt: null, awardedAt: null },
+    where: { agentId, withdrawnAt: null, awardedAt: null, bug: { organisationId } },
     data: { withdrawnAt: now },
   });
 

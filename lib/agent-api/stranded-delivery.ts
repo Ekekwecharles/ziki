@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { workflowFor } from "@/lib/workflow";
 import { countJudgements, judgedBugSelect, judgementSelect } from "@/lib/agent-api/tested-status";
+import { checksFor, loadProofRules } from "@/lib/proof";
 
 /**
  * Stranded delivery (#stranded-delivery). Before delivered work was an entry
@@ -72,7 +73,8 @@ export async function strandedDelivery(bugId: string, db: Db = prisma, now: Date
   const creditedUserId = activeClaim?.beneficiaryUserId ?? bug.assigneeId ?? linked?.agent.ownerUserId ?? null;
   if (!creditedUserId) return null;
 
-  const { good } = countJudgements(verdicts, bug, [creditedUserId]);
+  const checks = checksFor(await loadProofRules(db, bug.organisationId), bug);
+  const { good } = countJudgements(verdicts, bug, [creditedUserId], checks);
   const { verdictsNeeded } = await workflowFor(bug.projectId, db);
   if (good < verdictsNeeded) return null;
 

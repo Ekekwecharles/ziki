@@ -2,6 +2,7 @@ import type { AgentLevel } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { authorizationToken, hashSecret } from "@/lib/agents/keys";
+import { guestOrganisationFor, LIVE_GUEST } from "@/lib/agents/guest-access";
 import { AgentLevelError } from "@/lib/agents/levels";
 import { AgentPlatformDisabledError, agentPlatformDisabledResponse } from "@/lib/agents/platform-gate";
 import { isAgentPlatformEnabled } from "@/lib/feature-flags";
@@ -18,6 +19,11 @@ export { AgentPlatformDisabledError, agentPlatformDisabledResponse };
  * owner still belongs there (#user-agents). The call runs as that activation:
  * its organisation, class and rate budget. It writes nothing; routes record
  * what they did with `audit()`.
+ *
+ * On-call guests (12 Nov plan, D2): an agent added as a guest to a new
+ * workspace uses its home key there. When the request names a project or work
+ * feed in a workspace where the agent is a live guest, the call runs there
+ * instead, always as a working agent, without its owner being a member.
  *
  * The owner always comes from the agent row, never from the request body.
  */
@@ -39,6 +45,8 @@ export type AgentContext = {
   pausedAt?: Date | null;
   /** The key used for this call, so rotation can revoke exactly it. */
   keyId: string;
+  /** This call runs in a workspace where the agent is an on-call guest (D2). */
+  guest?: boolean;
 };
 
 export type AgentAuthFailure = "missing_key" | "invalid_key" | "revoked";
@@ -92,6 +100,8 @@ export async function requireAgent(request: HeaderSource): Promise<AgentContext>
           _count: { select: { skills: true } },
           pausedAt: true,
           owner: { select: { role: true, memberships: { select: { organisationId: true } } } },
+          // Its live on-call guest stays, read with the key so other agents pay nothing extra.
+          activations: { where: LIVE_GUEST, select: { organisationId: true, burst: true, burstUntil: true } },
         },
       },
     },
@@ -110,6 +120,9 @@ export async function requireAgent(request: HeaderSource): Promise<AgentContext>
   if (!agent.name || !agent.ownerUserId || !ownerInOrganisation) {
     throw new AgentAuthError("invalid_key");
   }
+  // An on-call guest working in the workspace it is a guest in: no membership there, working class only.
+  const guestOrganisationId = await guestOrganisationFor(prisma, request.url, agent.activations ?? []);
+  const guestStay = guestOrganisationId ? agent.activations?.find((stay) => stay.organisationId === guestOrganisationId) : undefined;
 
   // #agent-work-gate: with the key good, the first check is whether this agent
   // may work at all (assertAgentMayWork below). lastUsedAt is stamped first, so
@@ -143,13 +156,15 @@ export async function requireAgent(request: HeaderSource): Promise<AgentContext>
     agentId: agent.id,
     name: agent.name,
     ownerId: agent.ownerUserId,
-    organisationId: key.organisationId,
-    level: activation.level,
-    ownerRole: agent.owner.role ?? null,
-    burst: activation.burst,
-    burstUntil: activation.burstUntil ?? null,
+    organisationId: guestStay ? guestStay.organisationId : key.organisationId,
+    level: guestStay ? "working" : activation.level,
+    // A guest never carries its owner's site-wide role into a client's workspace: no admin powers there.
+    ownerRole: guestStay ? null : (agent.owner.role ?? null),
+    burst: guestStay ? guestStay.burst : activation.burst,
+    burstUntil: (guestStay ? guestStay.burstUntil : activation.burstUntil) ?? null,
     pausedAt: agent.pausedAt ?? null,
     keyId: key.id,
+    ...(guestStay ? { guest: true } : {}),
   };
 }
 

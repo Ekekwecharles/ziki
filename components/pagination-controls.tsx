@@ -10,6 +10,8 @@ export interface PaginationControlsProps {
   queryParams: Record<string, string | undefined>;
   basePath: string;
   itemLabel?: string;
+  /** For a word that doesn't take an "s" ("person" and "people"). */
+  itemLabelPlural?: string;
 }
 
 export function PaginationControls({
@@ -21,6 +23,7 @@ export function PaginationControls({
   queryParams,
   basePath,
   itemLabel = "issue",
+  itemLabelPlural,
 }: PaginationControlsProps) {
   if (totalCount === 0) return null;
 
@@ -43,8 +46,7 @@ export function PaginationControls({
         Showing <span className="font-semibold text-zk-text">{from}</span>–
         <span className="font-semibold text-zk-text">{to}</span> of{" "}
         <span className="font-semibold text-zk-text">{totalCount}</span>{" "}
-        {itemLabel}
-        {totalCount === 1 ? "" : "s"}
+        {totalCount === 1 ? itemLabel : (itemLabelPlural ?? `${itemLabel}s`)}
       </div>
 
       {totalPages > 1 && (

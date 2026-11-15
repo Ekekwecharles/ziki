@@ -13,7 +13,7 @@ import {
 
 /**
  * Floating launcher for the signed-in app: one bot button in the lower-right
- * that rolls out three actions — speak to support, play a game, view agents.
+ * that rolls out two actions — speak to support, view agents.
  *
  * It replaces the old "Report issue" pill in the signed-in shell (the
  * pre-login button in the auth layout is untouched). The button can be dragged
@@ -23,8 +23,6 @@ import {
 /** Where the drag offset is remembered between visits. */
 export const LAUNCHER_OFFSET_STORAGE_KEY = "ziki.agent-launcher.offset";
 
-/** Games live on start.ng; the community grid is the front door. */
-const DEFAULT_GAMES_URL = "https://start.ng/games";
 /** The in-app support channel, used when no external form is configured. */
 const DEFAULT_SUPPORT_URL = "/escalations";
 /** The workspace agent roster. */
@@ -43,8 +41,6 @@ type FloatingAgentLauncherProps = {
   supportHref?: string;
   /** An in-app support action (the support guide chat) instead of a link. */
   onSupport?: () => void;
-  /** Where "Play a game" goes. */
-  gamesHref?: string;
   /** Where "View agents" goes. */
   agentsHref?: string;
   /** Render inside an existing floating container instead of fixing itself. */
@@ -121,30 +117,6 @@ function SupportIcon() {
   );
 }
 
-function GameIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="16"
-      height="16"
-      aria-hidden="true"
-      focusable="false"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3.5" y="3.5" width="17" height="17" rx="4" />
-      <circle cx="8.5" cy="8.5" r="1.2" fill="currentColor" stroke="none" />
-      <circle cx="15.5" cy="8.5" r="1.2" fill="currentColor" stroke="none" />
-      <circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" />
-      <circle cx="8.5" cy="15.5" r="1.2" fill="currentColor" stroke="none" />
-      <circle cx="15.5" cy="15.5" r="1.2" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
 function AgentsIcon() {
   return (
     <svg
@@ -193,7 +165,6 @@ function BotIcon() {
 export function FloatingAgentLauncher({
   supportHref,
   onSupport,
-  gamesHref,
   agentsHref,
   embedded = false,
   onOpenChange,
@@ -319,12 +290,6 @@ export function FloatingAgentLauncher({
       href: supportHref ?? DEFAULT_SUPPORT_URL,
       onSelect: onSupport,
       icon: <SupportIcon />,
-    },
-    {
-      key: "game",
-      label: "Play a game",
-      href: gamesHref ?? DEFAULT_GAMES_URL,
-      icon: <GameIcon />,
     },
     {
       key: "agents",

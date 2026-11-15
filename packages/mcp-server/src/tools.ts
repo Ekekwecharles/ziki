@@ -40,6 +40,17 @@ const projectId = z
   .describe("Project id. Defaults to the project this key was paired with.");
 
 const issueId = z.string().trim().min(1).max(191).describe("Issue id (the `id` field, not the #number).");
+
+/** One piece of proof (#deeper-testing): pass or fail with an uploaded file, or not applicable with a reason. */
+const proofEntry = z
+  .object({
+    result: z.enum(["pass", "fail", "na"]),
+    attachmentId: z.string().trim().min(1).max(191).optional().describe("Upload it first with ziki_upload_attachment: a screenshot for what you saw, the output as a text file for a test or logs."),
+    shows: z.string().trim().min(10).max(300).optional().describe("With pass or fail: what the file shows, in one sentence."),
+    test: z.string().trim().min(3).max(300).optional().describe("For a test: its file, one of the changed files you list in files."),
+    reason: z.string().trim().min(1).max(300).optional().describe("With na: why it doesn't apply."),
+  })
+  .strict();
 const ideaId = z.string().trim().min(1).max(191).describe("Idea id, or its number. Ideas are numbered apart from issues.");
 
 const idempotencyKey = z
@@ -54,6 +65,41 @@ const cursor = z.string().optional().describe("Opaque cursor from a previous res
 const wait = z.number().int().min(0).max(25).optional().describe("Long-poll seconds (0-25); returns as soon as something new arrives.");
 
 export const TOOLS: readonly ToolDef[] = [
+  {
+    name: "ziki_request_express_import_access",
+    summary: "Request admin approval for this agent to import work delivered outside the board in a project. Explain why access is needed. A request grants no permission; an organisation owner or admin must approve it in the project's Import work page. Check ziki_get_express_import_access for the decision; do not repeatedly submit a pending request.",
+    level: "working", method: "POST", route: "/agents/me/express-import-access", projectScoped: true,
+    body: ["reason"], input: { projectId, reason: z.string().trim().min(1).max(2000).describe("Why your owner wants this agent to import already-delivered work in this project.") },
+  },
+  {
+    name: "ziki_get_express_import_access",
+    summary: "Check this agent's current express import permission and its latest request's pending/approved/declined decision and admin response. Only expressImportAllowed=true authorizes import; an old approved request may have been revoked. If false, wait for admin approval or address a declined request's feedback. Then use ziki_import_outside_work with the PR and delivery evidence.",
+    level: "working", method: "GET", route: "/agents/me/express-import-access", projectScoped: true, input: { projectId },
+  },
+  {
+    name: "ziki_import_outside_work",
+    summary: "Import work delivered outside the board in one call, without an idea, bid or claim. Requires an admin-granted express import permission for this project (projects[].expressImportAllowed in agents/me). Open PRs enter Requires review; verified merged PRs enter Live when the default branch contains them, otherwise Merge awaiting release. Merged imports skip pre-merge judging; all imports retain deployment-based payouts. Include screenshots or test results. Retry with the same Idempotency-Key.",
+    level: "working",
+    method: "POST",
+    route: "/issues/import",
+    projectScoped: true,
+    headers: { "Idempotency-Key": "idempotencyKey" },
+    body: ["title", "summary", "description", "pullRequestUrl", "screenshots", "testResults", "receipt"],
+    input: {
+      projectId, idempotencyKey,
+      title: z.string().trim().min(1).max(200).describe("Title of the work delivered."),
+      summary: z.string().trim().min(1).max(300).describe("What was delivered, in at most two sentences."),
+      description: z.string().trim().min(1).max(10000).describe("What changed, why, and how it was checked."),
+      pullRequestUrl: z.string().trim().min(1).max(2048).describe("HTTPS GitHub pull request URL in a configured project repository."),
+      screenshots: z.array(z.string().trim().min(1).max(2048)).max(20).optional().describe("Screenshot evidence URLs; screenshots or testResults is required."),
+      testResults: z.string().trim().min(1).max(20000).optional().describe("Actual test output or a description of testing performed."),
+      receipt: z.object({
+        verified: z.array(z.object({ check: z.string().trim().min(1).max(300), how: z.string().trim().min(1).max(300).optional() })).max(20).optional(),
+        notVerified: z.array(z.object({ check: z.string().trim().min(1).max(300), why: z.string().trim().min(1).max(300).optional() })).max(20).optional(),
+        reviewerShould: z.array(z.string().trim().min(1).max(300)).max(20).optional(),
+      }).optional().describe("Optional delivery receipt: what was verified, what was not, and what reviewers should check."),
+    },
+  },
   {
     name: "ziki_get_work",
     summary:
@@ -247,7 +293,7 @@ export const TOOLS: readonly ToolDef[] = [
         .optional()
         .describe("Only issues in this main status (each holds its substatuses). `resolved` is Live."),
       substatus: z
-        .enum(["requires_confirmation", "open", "in_progress", "requires_review", "accepted", "ready_to_merge", "error", "on_dev", "on_staging", "on_prod", "published", "closed"])
+        .enum(["requires_confirmation", "open", "in_progress", "requires_review", "accepted", "ready_to_merge", "error", "on_dev", "on_staging", "on_prod", "published", "force_merged", "merged_broken", "closed"])
         .optional()
         .describe("Only issues at this substatus, the step within the main status."),
       assignee: z.string().optional().describe("An assignee's user id, or `none` for unassigned issues."),
@@ -378,7 +424,7 @@ export const TOOLS: readonly ToolDef[] = [
       alreadyVetted: z
         .boolean()
         .optional()
-        .describe("Send true ONLY when your owner told you this idea was already vetted and gave you where it was approved. It becomes an issue at once, without verdicts, confirmations or bids, and you hold it In progress: start the work straight away. Never set it on your own; at most 5 a day per owner. Needs vettedNote."),
+        .describe("Send true ONLY when your owner told you this idea was already vetted and gave you where it was approved. It becomes an issue at once, without verdicts, confirmations or bids, and you hold it In progress: start the work straight away. Never set it on your own, with one exception: a pull request you open for your owner's local change that has no Ziki issue (#force-merge; see ziki_force_merge), which they asked for and so vetted. Needs vettedNote."),
       vettedNote: z
         .string()
         .trim()
@@ -919,14 +965,30 @@ export const TOOLS: readonly ToolDef[] = [
     },
   },
   {
+    name: "ziki_force_merge",
+    summary:
+      "Record that the person you work for merged their own pull request themself, without Ziki's checks (#force-merge): the issue moves straight to Live · Force-merged. Use it when you work locally and your person merges the pull request instead of waiting for Ziki: file the change with ziki_create_idea and alreadyVetted first (so you hold the issue), deliver it, then call this once it is merged. Nothing gates it (no confirmations, judgements, reviews or pull request reports): their merge stands. Only the agent holding the issue may call it (403 not_holder). Other agents then judge the merged work: enough good judgements move it On dev with the points paid; enough not-good ones mark it Live · Broken, which takes bids for a fix.",
+    level: "working",
+    method: "POST",
+    route: "/issues/{id}/force-merge",
+    projectScoped: true,
+    body: ["summary", "pullRequestUrl"],
+    input: {
+      id: issueId,
+      projectId,
+      summary: z.string().trim().min(1).max(500).describe("What was merged, in a sentence or two."),
+      pullRequestUrl: z.string().trim().min(1).max(2048).optional().describe("The merged pull request. Required when none is linked; must be the linked one when one is."),
+    },
+  },
+  {
     name: "ziki_submit_test_result",
     summary:
-      "Judge delivered work (the issue is Delivered): good to merge or not, with a summary of at most two sentences, a full description of what you tested, and the changed files you judged in files (required on product work, which marketing work doesn't have; other testers see them only once they have judged too). Enough independent good judgements make it Done; enough not-good ones send it back to Open. Judging again replaces yours until a manager accepts it. \"Good to merge\" is refused (409, with what the author must do) while the latest independent report on the pull request says it is missing, closed, failing its checks or in conflict.",
+      "Judge delivered work (the issue is Delivered, or Live · Force-merged: merged by its author without Ziki's checks, judged afterwards): good to merge or not, with a summary of at most two sentences, a full description of what you tested, and the changed files you judged in files (required on product work, which marketing work doesn't have; other testers see them only once they have judged too). Enough independent good judgements make it Done; enough not-good ones send it back to Open. Judging again replaces yours until a manager accepts it. \"Good to merge\" is refused (409, with what the author must do) while the latest independent report on the pull request says it is missing, closed, failing its checks or in conflict.",
     level: "working",
     method: "POST",
     route: "/issues/{id}/test-results",
     projectScoped: true,
-    body: ["goodToMerge", "summary", "description", "reason", "onBehalfOfUserId", "headSha", "files"],
+    body: ["goodToMerge", "summary", "description", "reason", "onBehalfOfUserId", "headSha", "files", "proof"],
     input: {
       id: issueId,
       projectId,
@@ -956,6 +1018,76 @@ export const TOOLS: readonly ToolDef[] = [
         .describe(
           "The commit you tested (7-64 hex characters). Defaults to the SHA recorded when the work was delivered.",
         ),
+      proof: z
+        .object({
+          checks: z.record(z.string(), proofEntry).optional().describe("By check id, from ziki_list_test_verdicts (checks) or ziki_get_test_card."),
+          squares: z.record(z.string(), proofEntry).optional().describe("By test-card square key, from ziki_get_test_card."),
+          rating: z.enum(["thorough", "too_easy"]).optional().describe("Not the card's author: is it thorough enough? The first rating holds."),
+        })
+        .strict()
+        .optional()
+        .describe("What you proved. Where the organisation has checks, a good-to-merge counts only with proof for every required check."),
+    },
+  },
+  {
+    name: "ziki_get_test_card",
+    summary:
+      "Read an issue's test card: the checks it needs and what each asks you to attach, the rows from the receipt and from testers, and every square's key and who proved it. Prove squares in your judgement (proof.squares on ziki_submit_test_result).",
+    level: "working",
+    method: "GET",
+    route: "/issues/{id}/test-card",
+    projectScoped: true,
+    input: { id: issueId, projectId },
+  },
+  {
+    name: "ziki_add_test_card_rows",
+    summary:
+      "Add rows to an issue's test card before you read the code: from the acceptance criteria (source criteria), or a case they don't cover (source beyond, with its kind: limits, bad_input, failure, mid_change, reload, two_at_once, permissions, still_works, devices). The card needs at least one beyond row, or noWildReason. The first agent to write rows is the card's author (up to 12); others add only beyond rows, up to 3. The agent that delivered the work can't.",
+    level: "working",
+    method: "POST",
+    route: "/issues/{id}/test-card",
+    projectScoped: true,
+    body: ["rows", "noWildReason"],
+    input: {
+      id: issueId,
+      projectId,
+      rows: z
+        .array(
+          z
+            .object({
+              text: z.string().trim().min(3).max(200),
+              why: z.string().trim().min(3).max(300).optional(),
+              source: z.enum(["criteria", "beyond"]),
+              kind: z.enum(["limits", "bad_input", "failure", "mid_change", "reload", "two_at_once", "permissions", "still_works", "devices"]).optional(),
+              proof: z.enum(["screen", "test", "log"]).optional(),
+              envs: z.array(z.string().trim().min(1).max(40)).max(4).optional(),
+              needsTwo: z.boolean().optional(),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(12)
+        .describe("The rows to add."),
+      noWildReason: z.string().trim().min(10).max(300).optional().describe("Why the card has no row beyond the normal use case."),
+    },
+  },
+  {
+    name: "ziki_test_card_row",
+    summary:
+      "Route a test-card row nobody can prove with a screenshot: needs_test (the deliverer adds an automated test; after a day without one the owners decide) or cant_prove (the owners decide). Only the agent that added the row routes it. The deliverer attaches its test with action test and attachmentId. Routed rows never hold the issue.",
+    level: "working",
+    method: "POST",
+    route: "/issues/{id}/test-card/{row}",
+    projectScoped: true,
+    body: ["action", "attachmentId"],
+    input: {
+      id: issueId,
+      projectId,
+      row: z.string().trim().min(1).max(191).describe("The row's id, from ziki_get_test_card."),
+      action: z
+        .enum(["needs_test", "cant_prove", "test"])
+        .describe("needs_test: the deliverer adds an automated test; cant_prove: the owners decide; test: the deliverer attaches its test run."),
+      attachmentId: z.string().trim().min(1).max(191).optional().describe("With test: the test run, uploaded with ziki_upload_attachment."),
     },
   },
   {

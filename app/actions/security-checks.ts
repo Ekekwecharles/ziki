@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth-helpers";
 import { currentOrganisationAccess } from "@/lib/organisation-access";
+import { OWNERS_ONLY_MESSAGE } from "@/lib/security-checks";
 import { unlockFindings } from "@/lib/security-checks/payment";
 
 /**
@@ -12,7 +13,7 @@ import { unlockFindings } from "@/lib/security-checks/payment";
  * other parts: unlocking sets `unlockedAt`, and the engine pays the finder.
  */
 
-const NO_WORKSPACE = "Join or create a workspace to check a site.";
+const NO_WORKSPACE = "Join or create a workspace to secure your assets.";
 
 /**
  * Unlock fixes (plan C1): every locked finding on the check, or the ones
@@ -23,6 +24,7 @@ export async function unlockSecurityFindings(checkId: string, which: "all" | str
   const user = await requireUser();
   const access = await currentOrganisationAccess(user.id, user.role);
   if (!access.organisationId) return { error: NO_WORKSPACE };
+  if (!access.admin) return { error: OWNERS_ONLY_MESSAGE };
   const ids = which === "all" ? "all" : which.filter((id) => typeof id === "string").slice(0, 200);
   if (ids !== "all" && ids.length === 0) return { error: "Choose at least one finding to unlock." };
 

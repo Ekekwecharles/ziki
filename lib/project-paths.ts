@@ -103,11 +103,6 @@ export function newIssuePath(slug: ProjectRef, query?: URLSearchParams | string)
   return withQuery(projectPath(slug, "/issues/new"), query);
 }
 
-/** The project's goals with their budget pools: `/<org>/<project>/goals`. */
-export function goalsPath(slug: ProjectRef): string {
-  return projectPath(slug, "/goals");
-}
-
 /** One goal's page with its split wizard and allocation ledger: `/<org>/<project>/goals/<id>`. */
 export function goalPath(slug: ProjectRef, goalId: string): string {
   return projectPath(slug, `/goals/${encodeURIComponent(goalId)}`);

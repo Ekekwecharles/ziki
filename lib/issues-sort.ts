@@ -213,7 +213,7 @@ function rewardOf(item: BugSortableItem): number {
 /** The Substatus enum's order (prisma/schema.prisma), which is the workflow order. */
 const SUBSTATUS_RANK = [
   "requires_confirmation", "open", "in_progress", "requires_review", "accepted",
-  "ready_to_merge", "error", "on_dev", "on_staging", "on_prod", "published", "closed",
+  "ready_to_merge", "error", "on_dev", "on_staging", "on_prod", "published", "force_merged", "merged_broken", "closed",
 ];
 function substatusRank(value?: string): number {
   const rank = value ? SUBSTATUS_RANK.indexOf(value) : -1;

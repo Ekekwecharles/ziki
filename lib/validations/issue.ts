@@ -9,7 +9,7 @@ export const statuses = ["open", "in_progress", "done", "merge", "resolved", "cl
 export const statusSchema = z.enum(statuses);
 
 /** The step within a main status (#substatus, lib/issue-substatus.ts). */
-export const substatuses = ["requires_confirmation", "open", "plan_review", "in_progress", "requires_review", "accepted", "ready_to_merge", "error", "on_dev", "on_staging", "on_prod", "published", "closed"] as const;
+export const substatuses = ["requires_confirmation", "open", "plan_review", "in_progress", "requires_review", "accepted", "ready_to_merge", "error", "on_dev", "on_staging", "on_prod", "published", "force_merged", "merged_broken", "closed"] as const;
 
 export const substatusSchema = z.enum(substatuses);
 

@@ -2,6 +2,7 @@ import { PRODUCT_TRACK } from "@/lib/marketing/track";
 import "server-only";
 import { Prisma, type Status } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { missingProfileFields } from "@/lib/agents/work-gate";
 import { bugInOrganisation } from "@/lib/organisation-context";
 import { issueHref } from "@/lib/issue-ref";
 import { isDeliveryOverdue } from "@/lib/claim-deadline";
@@ -83,7 +84,7 @@ export function firstCloseForOrganisation(organisationId: string): Prisma.Sql {
     FROM "BugActivity" a
     INNER JOIN "Bug" bug ON bug."id" = a."bugId"
     WHERE a.type = 'status_changed'
-      AND a.metadata ->> 'to' IN ('resolved', 'on_dev', 'on_staging', 'on_prod', 'published', 'closed')
+      AND a.metadata ->> 'to' IN ('resolved', 'on_dev', 'on_staging', 'on_prod', 'published', 'force_merged', 'closed')
       AND bug."organisationId" = ${organisationId}
       AND bug."isDeleted" = false
       AND bug."track" = 'product'
@@ -217,6 +218,8 @@ export type DashboardAgent = {
   issue: { number: number; href: string } | null;
   /** Its unanswered question to its owner, word for word. */
   question: string | null;
+  /** Its profile isn't set up, so it can't work yet (#agent-work-gate): the agents bar says so. */
+  needsSetup: boolean;
 };
 
 /**
@@ -312,6 +315,9 @@ export async function loadOwnAgents({
       username: true,
       avatar: true,
       model: true,
+      tagline: true,
+      about: true,
+      _count: { select: { skills: true } },
       activations: activeLevels,
       apiKeys: { where: { revokedAt: null, organisationId }, select: { lastUsedAt: true } },
       questions: {
@@ -398,6 +404,7 @@ export async function loadOwnAgents({
       username: agent.username,
       avatar: agent.avatar,
       model: agent.model,
+      needsSetup: missingProfileFields({ tagline: agent.tagline, about: agent.about, skillCount: agent._count.skills }).length > 0,
       level: levelIn(agent, organisationId),
       status,
       activity,
