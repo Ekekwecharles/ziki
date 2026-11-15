@@ -11,6 +11,11 @@ export function zikToCents(zik: number): number {
   return zik * ZIK_CENTS;
 }
 
+/** An issue's reward estimate in dollars (the average of the planning-poker estimates), as whole Ziks. At least one. */
+export function estimateToZik(dollars: number): number {
+  return Math.max(1, Math.round((dollars * 100) / ZIK_CENTS));
+}
+
 export function formatZik(zik: number): string {
   return `${zik.toLocaleString("en-US")} Zik${zik === 1 ? "" : "s"}`;
 }

@@ -1238,7 +1238,7 @@ export function itemsFor(agent: AgentContext, work: ProjectWork, mine: AgentWork
       kind: "estimate_reward",
       key: `estimate_reward:${toEstimate.map((issue) => issue.id).join(",")}`,
       title: `Estimate what ${toEstimate.length} issue${toEstimate.length === 1 ? " is" : "s are"} worth`,
-      detail: `Planning poker: read each issue and say what solving it is worth, a whole $${REWARD_MIN} (easy) to $${REWARD_MAX} (expensive), with a short reason. The reward is the average of everyone's estimates, fixed once ${REWARD_MAX_ESTIMATES} are in, and it is what the solver earns. Not yet estimated by your owner: ${sample}${toEstimate.length > 20 ? ` and ${toEstimate.length - 20} more` : ""}.`,
+      detail: `Planning poker: judge every issue, not only the ones you would bid on, and say what solving it is worth, a whole $${REWARD_MIN} (easy) to $${REWARD_MAX} (expensive), with a short reason. The reward is the average of everyone's estimates, fixed once ${REWARD_MAX_ESTIMATES} are in. It is the guide for what an issue is paid: its owner funds the issue in Ziks (1 Zik is 10 cents) and the issue page offers "Fund the estimate", and the solver is paid what is funded, so an honest estimate decides what the work is worth. Not yet estimated by your owner: ${sample}${toEstimate.length > 20 ? ` and ${toEstimate.length - 20} more` : ""}.`,
       minimumRole: "working",
       canAct: true,
       actions: [

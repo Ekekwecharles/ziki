@@ -2117,7 +2117,11 @@ export default async function BugDetailPage({ params, searchParams }: BugPagePro
 
           {githubPanel ? <GitHubStatusPanel {...githubPanel} /> : null}
 
-          <FundIssueSection bugId={bug.id} userId={user.id} />
+          <FundIssueSection
+            bugId={bug.id}
+            userId={user.id}
+            estimate={rewardRow && rewardEstimates.length > 0 ? { dollars: Number(rewardRow.reward), count: rewardEstimates.length } : null}
+          />
 
               {/* Who has the issue, while it is the latest thing (In progress); the timeline below keeps the award after that. */}
               {(hold?.status === "active" || hold?.status === "planning") && bug.status === "in_progress" ? <AwardBox hold={hold} agentPaused={Boolean(workingAgent?.pausedAt)} bugId={bug.id} isWatching={isWatchingIssue} isIssueOwner={bug.reporterId === user.id} /> : null}

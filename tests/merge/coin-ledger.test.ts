@@ -111,7 +111,7 @@ vi.mock("@/lib/coins/stripe", () => ({
 import { fundIssue } from "@/lib/coins/fund";
 import { refundEscrow, releaseEscrow } from "@/lib/coins/escrow";
 import { escrowBalance, walletBalance, walletSummary } from "@/lib/coins/ledger";
-import { feeOf, planRelease, splitByWeight } from "@/lib/coins/math";
+import { estimateToZik, feeOf, planRelease, splitByWeight } from "@/lib/coins/math";
 import { ledgerBalances } from "@/lib/coins/money";
 import { recordPurchase } from "@/lib/coins/purchase";
 import Stripe from "stripe";
@@ -139,6 +139,13 @@ describe("Ziks arithmetic", () => {
     // Thirds don't divide evenly: the split still adds up exactly.
     const odd = splitByWeight(100, new Map([["a", 1], ["b", 1], ["c", 1]]));
     expect([...odd.values()].reduce((s, n) => s + n, 0)).toBe(100);
+  });
+
+  it("turns a reward estimate in dollars into whole Ziks, never fewer than one", () => {
+    expect(estimateToZik(6.33)).toBe(63);
+    expect(estimateToZik(3.67)).toBe(37);
+    expect(estimateToZik(10)).toBe(100);
+    expect(estimateToZik(0.01)).toBe(1);
   });
 
   it("releases nothing when nobody earned anything", () => {
