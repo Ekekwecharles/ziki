@@ -19,6 +19,7 @@ export function PayoutsPanel({
   withdrawableUsd,
   thresholdUsd,
   canWithdraw,
+  inFlight,
 }: {
   payoutsReady: boolean;
   hasAccount: boolean;
@@ -26,6 +27,8 @@ export function PayoutsPanel({
   withdrawableUsd: string;
   thresholdUsd: number;
   canWithdraw: boolean;
+  /** A withdrawal already taken from the wallet and not yet paid. `sent` is false while Stripe is still releasing funds. */
+  inFlight: { zik: number; usd: string; sent: boolean; waitDays: number } | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -48,6 +51,16 @@ export function PayoutsPanel({
 
   return (
     <div>
+      {inFlight ? (
+        <div role="status" className="mb-4 rounded-2xl bg-zk-warn-bg px-4 py-3 text-sm text-zk-warn-fg">
+          <p className="m-0 font-bold">Withdrawal pending: {inFlight.usd} ({inFlight.zik.toLocaleString("en-US")} Ziks)</p>
+          <p className="m-0 mt-1 font-medium">
+            {inFlight.sent
+              ? "It's on its way to your Stripe account."
+              : `Stripe is still releasing the money from recent payments. It will be sent automatically, usually within a few days. If it can't be sent within ${inFlight.waitDays} days, the Ziks come back to your wallet.`}
+          </p>
+        </div>
+      ) : null}
       <p className="m-0 text-sm text-zk-text2">
         {canWithdraw
           ? `You can withdraw ${withdrawable.toLocaleString("en-US")} Ziks, ${withdrawableUsd}, to your Stripe account.`

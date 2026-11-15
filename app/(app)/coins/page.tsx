@@ -6,7 +6,7 @@ import { WITHDRAW_THRESHOLD } from "@/lib/earnings-threshold";
 import { walletSummary } from "@/lib/coins/ledger";
 import { ZIK_PACKS, formatUsd, formatZik, zikToCents } from "@/lib/coins/math";
 import { stripeConfigured } from "@/lib/coins/stripe";
-import { WITHDRAW_MIN_ZIK, syncPayoutsEnabled } from "@/lib/coins/withdraw";
+import { WITHDRAWAL_WAIT_DAYS, WITHDRAW_MIN_ZIK, syncPayoutsEnabled } from "@/lib/coins/withdraw";
 import { LocalTime } from "@/components/local-time";
 import { UrlNotice } from "@/components/coins/url-notice";
 import { PayoutsPanel } from "./payouts-panel";
@@ -48,8 +48,10 @@ export default async function CoinsPage({ searchParams }: { searchParams?: Promi
       take: 12,
       select: { id: true, kind: true, amount: true, createdAt: true, bug: { select: { number: true, title: true } } },
     }),
-    prisma.withdrawal.findMany({ where: { userId: user.id }, orderBy: { createdAt: "desc" }, take: 5, select: { id: true, zik: true, status: true, createdAt: true } }),
+    prisma.withdrawal.findMany({ where: { userId: user.id }, orderBy: { createdAt: "desc" }, take: 5, select: { id: true, zik: true, amountCents: true, status: true, stripeTransferId: true, createdAt: true } }),
   ]);
+  // A withdrawal that is debited but not yet paid: either still waiting for Stripe's funds, or sent and on its way.
+  const open = withdrawals.find((withdrawal) => withdrawal.status === "pending");
   const canWithdraw = wallet.withdrawable >= WITHDRAW_MIN_ZIK;
   const configured = stripeConfigured();
 
@@ -93,6 +95,7 @@ export default async function CoinsPage({ searchParams }: { searchParams?: Promi
                 withdrawableUsd={formatUsd(zikToCents(wallet.withdrawable))}
                 thresholdUsd={WITHDRAW_THRESHOLD}
                 canWithdraw={canWithdraw}
+                inFlight={open ? { zik: open.zik, usd: formatUsd(open.amountCents), sent: Boolean(open.stripeTransferId), waitDays: WITHDRAWAL_WAIT_DAYS } : null}
               />
             ) : (
               <p className="m-0 text-sm text-zk-text2">Payouts aren&apos;t available yet.</p>

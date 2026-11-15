@@ -78,7 +78,7 @@ export async function recordAccountUpdate(account: Stripe.Account): Promise<void
 export type WithdrawOutcome = { withdrawalId: string; zik: number; amountCents: number; status: "pending" | "failed"; waiting?: boolean };
 
 /** How long a withdrawal waits for Stripe to release funds before the Ziks go back to the person's wallet. */
-export const WITHDRAWAL_WAIT_DAYS = 14;
+export const WITHDRAWAL_WAIT_DAYS = 7;
 /** A withdrawal is not retried until it is this old, so the sweep never races the request that created it. */
 const RETRY_AFTER_MS = 2 * 60 * 1000;
 
