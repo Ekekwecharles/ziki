@@ -16,6 +16,7 @@ export const metadata = { title: "Ziks" };
 export const dynamic = "force-dynamic";
 
 const card = "rounded-[22px] border border-zk-border bg-zk-surface p-5 sm:p-6";
+const notice = "m-0 rounded-2xl px-4 py-3 text-sm font-semibold";
 const label = "text-[11px] font-bold uppercase tracking-[0.08em] text-zk-muted";
 
 /** What a ledger row says happened, for the activity list. */
@@ -35,7 +36,11 @@ const KIND_LABEL = {
  * and what moved. Buying is Stripe Checkout; the wallet is only credited when
  * Stripe's webhook says the payment went through. Earning and withdrawing are on /coins/payouts (the Withdraw page).
  */
-type CoinsQuery = { bought?: string; subscribed?: string; error?: string };
+function hasRecentPurchase(entries: { kind: string; createdAt: Date }[]): boolean {
+  return entries.some((entry) => entry.kind === "purchase" && Date.now() - entry.createdAt.getTime() < 10 * 60 * 1000);
+}
+
+type CoinsQuery ={ bought?: string; subscribed?: string; error?: string };
 
 export default async function CoinsPage({ searchParams }: { searchParams?: Promise<CoinsQuery> }) {
   const [user, query] = await Promise.all([requireUser(), searchParams ?? Promise.resolve({} as CoinsQuery)]);
@@ -54,6 +59,8 @@ export default async function CoinsPage({ searchParams }: { searchParams?: Promi
     }),
   ]);
   const configured = stripeConfigured();
+  // Whether the Stripe webhook has already credited what was just paid for (a purchase in the last few minutes).
+  const justCredited = hasRecentPurchase(entries);
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5">
@@ -63,11 +70,16 @@ export default async function CoinsPage({ searchParams }: { searchParams?: Promi
         <p className="mt-1 text-sm text-zk-text2">Ziks fund issues and unlock security fixes. One Zik is {zikToCents(1)}¢.</p>
       </div>
 
+      {/* One-time notices: shown on arrival, then the query is dropped from the address (UrlNotice) so a refresh does not bring them back. */}
       {query.bought === "1" ? (
-        <p role="status" className="m-0 rounded-2xl bg-zk-ok-bg px-4 py-3 text-sm font-semibold text-zk-ok-fg">Thanks. Your Ziks arrive as soon as Stripe confirms the payment, usually within a few seconds.</p>
+        <UrlNotice role="status" className={`${notice} bg-zk-ok-bg text-zk-ok-fg`}>
+          {justCredited ? "Thanks. Your payment went through and your Ziks are in your wallet." : "Thanks. Your Ziks arrive as soon as Stripe confirms the payment, usually within a few seconds."}
+        </UrlNotice>
       ) : null}
       {query.subscribed === "1" ? (
-        <p role="status" className="m-0 rounded-2xl bg-zk-ok-bg px-4 py-3 text-sm font-semibold text-zk-ok-fg">Thanks. Your plan is on, and this month&apos;s Ziks arrive as soon as Stripe confirms the payment, usually within a few seconds.</p>
+        <UrlNotice role="status" className={`${notice} bg-zk-ok-bg text-zk-ok-fg`}>
+          {subscription ? `Thanks. Your plan is on, and every pack is now ${discountPercent}% cheaper.` : "Thanks. Your plan shows here as soon as Stripe confirms the payment, usually within a few seconds."}
+        </UrlNotice>
       ) : null}
       {query.error ? <UrlNotice role="alert" className="m-0 rounded-2xl bg-zk-warn-bg px-4 py-3 text-sm font-semibold text-zk-warn-fg">{query.error}</UrlNotice> : null}
 
