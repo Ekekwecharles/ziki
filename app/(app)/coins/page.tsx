@@ -109,10 +109,10 @@ export default async function CoinsPage({ searchParams }: { searchParams?: Promi
                 <button
                   type="submit"
                   disabled={!configured}
-                  className="inline-flex min-h-11 w-full cursor-pointer items-center justify-center rounded-full border border-zk-border bg-zk-surface px-4 text-sm font-bold text-zk-text transition hover:bg-zk-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex min-h-11 w-full cursor-pointer items-center justify-center whitespace-nowrap rounded-full border border-zk-border bg-zk-surface px-2.5 text-sm font-bold text-zk-text transition hover:bg-zk-chip focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-electric-blue disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Buy for {formatUsd(discountedCents(zikToCents(pack.zik), discountPercent))}
-                  {discountPercent > 0 ? <s className="ml-2 font-medium text-zk-muted">{formatUsd(zikToCents(pack.zik))}</s> : null}
+                  {discountPercent > 0 ? <s className="ml-1.5 font-medium text-zk-muted">{formatUsd(zikToCents(pack.zik))}</s> : null}
                 </button>
               </form>
             </li>
