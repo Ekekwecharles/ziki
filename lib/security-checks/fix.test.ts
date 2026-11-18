@@ -6,7 +6,7 @@ vi.mock("@/lib/agent-api/idea-verdicts", () => ({ convertClientVettedIdea: vi.fn
 
 import { convertClientVettedIdea } from "@/lib/agent-api/idea-verdicts";
 import { PLACEHOLDER_DESCRIPTION, PLACEHOLDER_SUMMARY } from "@/lib/security-findings";
-import { listFixProjects, loadMovePage, sendCheckFindings } from "./fix";
+import { listFixProjects, sendCheckFindings } from "./fix";
 
 const client = { userId: "u1", organisationId: "o1", superAdmin: false };
 const selection = { checkId: "c1", projectId: "p1", resultIds: ["r1"] };
@@ -33,7 +33,7 @@ beforeEach(() => {
   tx.$queryRaw.mockResolvedValue([{ postedAt: new Date(), projectId: null }]);
   tx.$executeRaw.mockResolvedValue(1);
   tx.project.findFirst.mockResolvedValue({ slug: "web", organisation: { slug: "ziki" } });
-  resultRows = [{ id: "r1", severity: "high", unlockedAt: new Date(), finding: null }];
+  resultRows = [{ id: "r1", checkId: "c1", severity: "high", unlockedAt: new Date(), finding: null }];
   lockedRows = [];
   tx.securityCheckResult.findMany.mockImplementation(async (args: { where: { unlockedAt?: null } }) => (args.where.unlockedAt === null ? lockedRows : resultRows));
   tx.securityCheckResult.updateMany.mockResolvedValue({ count: 0 });
@@ -48,8 +48,8 @@ beforeEach(() => {
 describe("Fix on Ziki", () => {
   it("charges Ziks for only the newly unlocked results in a mixed selection", async () => {
     resultRows = [
-      { id: "r1", severity: "high", unlockedAt: null, finding: null },
-      { id: "r2", severity: "low", unlockedAt: new Date(), finding: null },
+      { id: "r1", checkId: "c1", severity: "high", unlockedAt: null, finding: null },
+      { id: "r2", checkId: "c1", severity: "low", unlockedAt: new Date(), finding: null },
     ];
     lockedRows = [{ id: "r1", severity: "high", priceCoins: 7 }];
     tx.securityCheckResult.updateMany.mockResolvedValue({ count: 1 });
@@ -58,7 +58,7 @@ describe("Fix on Ziki", () => {
       ok: true, created: 2, coins: 7,
     });
     expect(tx.securityCheckResult.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: ["r1"] }, checkId: "c1", unlockedAt: null },
+      where: { id: { in: ["r1"] }, checkId: { in: ["c1"] }, unlockedAt: null },
       data: { unlockedAt: expect.any(Date) },
     });
     const rows = tx.coinEntry.createMany.mock.calls[0][0].data;
@@ -69,7 +69,7 @@ describe("Fix on Ziki", () => {
   });
 
   it("sends nothing and charges nothing when the wallet can't cover the findings", async () => {
-    resultRows = [{ id: "r1", severity: "high", unlockedAt: null, finding: null }];
+    resultRows = [{ id: "r1", checkId: "c1", severity: "high", unlockedAt: null, finding: null }];
     lockedRows = [{ id: "r1", severity: "high", priceCoins: 7 }];
     tx.coinEntry.aggregate.mockResolvedValue({ _sum: { amount: 3 } });
 
@@ -77,20 +77,6 @@ describe("Fix on Ziki", () => {
     expect(tx.securityCheckResult.updateMany).not.toHaveBeenCalled();
     expect(tx.coinEntry.createMany).not.toHaveBeenCalled();
     expect(tx.idea.create).not.toHaveBeenCalled();
-  });
-
-  it("does not load another person's check in the same workspace", async () => {
-    const otherCheck = { id: "c1", organisationId: "o1", requestedById: "u2" };
-    const lookup = {
-      securityCheck: { findFirst: vi.fn(({ where }) =>
-        Object.entries(where).every(([key, value]) => otherCheck[key as keyof typeof otherCheck] === value)
-          ? { postedAt: new Date(), target: { value: "example.test" } } : null,
-      ) },
-      securityCheckResult: { findMany: vi.fn().mockResolvedValue([]) },
-    };
-    await expect(loadMovePage(client, "c1", lookup as never)).resolves.toBeNull();
-    expect(lookup.securityCheckResult.findMany).not.toHaveBeenCalled();
-    await expect(loadMovePage({ ...client, userId: "u2" }, "c1", lookup as never)).resolves.toMatchObject({ posted: true });
   });
 
   it("offers projects for a posted report", async () => {
@@ -152,10 +138,29 @@ describe("Fix on Ziki", () => {
   it("rejects a mixed batch with unrelated results before making any writes", async () => {
     await expect(send({ ...selection, resultIds: ["r1", "other-check-result"] })).resolves.toMatchObject({ ok: false });
     expect(tx.securityCheckResult.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { checkId: "c1", id: { in: ["r1", "other-check-result"] } },
+      where: { id: { in: ["r1", "other-check-result"] }, OR: [{ checkId: "c1" }, { recheckItem: { checkId: "c1" }, NOT: { recheckState: "fixed" } }] },
     }));
     expect(tx.idea.create).not.toHaveBeenCalled();
     expect(tx.securityCheck.update).not.toHaveBeenCalled();
+  });
+
+  it("a rescan sends an earlier finding still there, paid with its own in one payment, copied from the scan that found it (18 Nov)", async () => {
+    resultRows = [
+      { id: "r1", checkId: "c1", severity: "high", unlockedAt: null, finding: null },
+      { id: "old1", checkId: "c0", severity: "medium", unlockedAt: null, finding: null },
+    ];
+    lockedRows = [{ id: "r1", severity: "high", priceCoins: 7 }, { id: "old1", severity: "medium", priceCoins: 4 }];
+    tx.securityCheckResult.updateMany.mockResolvedValue({ count: 2 });
+
+    await expect(send({ ...selection, resultIds: ["r1", "old1"] })).resolves.toMatchObject({ ok: true, created: 2, coins: 11 });
+    // One payment covering both scans.
+    expect(tx.securityCheckResult.updateMany).toHaveBeenCalledTimes(1);
+    expect(tx.securityCheckResult.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ["r1", "old1"] }, checkId: { in: ["c1", "c0"] }, unlockedAt: null },
+      data: { unlockedAt: expect.any(Date) },
+    });
+    // Each finding's text is copied from the scan that found it.
+    expect(tx.$executeRaw.mock.calls.map((call) => call.slice(1))).toEqual([["f1", "r1", "c1"], ["f1", "old1", "c0"]]);
   });
 
   it("keeps the first destination on subsequent submissions", async () => {
@@ -179,7 +184,7 @@ describe("Fix on Ziki", () => {
     expect(tx.securityCheck.update).toHaveBeenCalledWith({ where: { id: "c1" }, data: { projectId: "p1" } });
 
     tx.$queryRaw.mockResolvedValue([{ postedAt: new Date(), projectId: "p1" }]);
-    resultRows = [{ id: "r1", severity: "high", unlockedAt: new Date(), finding: { bug: { number: 42 } } }];
+    resultRows = [{ id: "r1", checkId: "c1", severity: "high", unlockedAt: new Date(), finding: { bug: { number: 42 } } }];
     await expect(send()).resolves.toEqual({ ok: true, created: 0, reused: 1, coins: 0, issues: [{ resultId: "r1", number: 42, href: "/ziki/web/42" }] });
     expect(tx.idea.create).toHaveBeenCalledTimes(1);
     expect(tx.securityFinding.create).toHaveBeenCalledTimes(1);

@@ -7,7 +7,7 @@ import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { SECURITY_SEVERITIES } from "@/lib/security-severity";
 import { isSecurityCleared } from "@/lib/security-checks";
-import { MAX_MORE_PARTS_PER_REPORT, MAX_RESULTS_PER_PART, SecurityJobError } from "./engine";
+import { MAX_MORE_PARTS_PER_REPORT, MAX_RECHECKS_PER_PART, MAX_RESULTS_PER_PART, SecurityJobError } from "./engine";
 
 /**
  * Shared handling for the security-check job routes (#security-checks).
@@ -90,5 +90,19 @@ export const reportBodySchema = z.object({
       }),
     )
     .max(MAX_MORE_PARTS_PER_REPORT)
+    .optional(),
+  /**
+   * A rescan's recheck part (#security-rescan): the answer for each earlier finding the part lists in `recheck`,
+   * `still_there` or `fixed`, with what was seen. One left out counts as still there.
+   */
+  rechecks: z
+    .array(
+      z.object({
+        id: z.string().trim().min(1).max(100),
+        state: z.enum(["still_there", "fixed"]),
+        note: z.string().trim().max(1000).optional(),
+      }),
+    )
+    .max(MAX_RECHECKS_PER_PART)
     .optional(),
 });

@@ -23,14 +23,18 @@ import { publicIssueDetailPath } from "@/lib/public-project-paths";
  *   issues-{n}.xml     /<org>/<project>/public-issues/{number} for every issue a guest's public list shows, ISSUES_PER_FILE a file
  *   agents-{n}.xml     /agent/{username} for every listed agent, AGENTS_PER_FILE a file
  *
- * Only public, indexable pages are listed: an agent that is revoked or still
- * being set up has a noindex profile, so it isn't here either.
+ * Only public, indexable pages are listed: an agent that is revoked, still
+ * being set up or left as an empty placeholder has a noindex profile, so it
+ * isn't here either, and a skill needs a populated skill row from a listed
+ * agent before its page is listed.
  */
 
 /** Agents per sitemap file; search engines accept up to 50,000 URLs a file. */
 export const AGENTS_PER_FILE = 10_000;
 /** Public issues per sitemap file. */
 export const ISSUES_PER_FILE = 10_000;
+/** The most URLs one section may list: search engines' 50,000-URL limit. */
+const SITEMAP_URL_LIMIT = 50_000;
 
 /**
  * The issues a guest can browse (#seo-sitemap): the same rule as the public issue
@@ -47,22 +51,36 @@ export const publicIssueWhere = {
 
 type Entry = { path: string; lastModified?: Date; changeFrequency?: "hourly" | "daily" | "weekly"; priority?: number };
 
+/** XML 1.0 forbids these control characters even when escaped; strip them before escaping markup. */
+const XML_INVALID_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g;
+
 const escapeXml = (value: string) =>
-  value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+  value
+    .replace(XML_INVALID_CHARS, "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+
+/** Only a real date may become `<lastmod>`: an Invalid Date would make the file unparseable. */
+const isoDate = (date?: Date | null): string | null =>
+  date instanceof Date && !Number.isNaN(date.getTime()) ? date.toISOString() : null;
 
 function urlset(entries: Entry[]): string {
-  const urls = entries.map((entry) =>
-    [
+  const urls = entries.map((entry) => {
+    const lastmod = isoDate(entry.lastModified);
+    return [
       "  <url>",
       `    <loc>${escapeXml(absoluteUrl(entry.path))}</loc>`,
-      entry.lastModified ? `    <lastmod>${entry.lastModified.toISOString()}</lastmod>` : null,
+      lastmod ? `    <lastmod>${lastmod}</lastmod>` : null,
       entry.changeFrequency ? `    <changefreq>${entry.changeFrequency}</changefreq>` : null,
       entry.priority !== undefined ? `    <priority>${entry.priority.toFixed(1)}</priority>` : null,
       "  </url>",
     ]
       .filter(Boolean)
-      .join("\n"),
-  );
+      .join("\n");
+  });
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join("\n")}\n</urlset>\n`;
 }
 
@@ -88,16 +106,17 @@ export async function sitemapSections(): Promise<Array<{ file: string; lastModif
 }
 
 export function sitemapIndexXml(sections: Array<{ file: string; lastModified?: Date }>): string {
-  const items = sections.map((section) =>
-    [
+  const items = sections.map((section) => {
+    const lastmod = isoDate(section.lastModified);
+    return [
       "  <sitemap>",
       `    <loc>${escapeXml(absoluteUrl(`/sitemaps/${section.file}`))}</loc>`,
-      section.lastModified ? `    <lastmod>${section.lastModified.toISOString()}</lastmod>` : null,
+      lastmod ? `    <lastmod>${lastmod}</lastmod>` : null,
       "  </sitemap>",
     ]
       .filter(Boolean)
-      .join("\n"),
-  );
+      .join("\n");
+  });
   return `<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${items.join("\n")}\n</sitemapindex>\n`;
 }
 
@@ -123,7 +142,9 @@ export async function sitemapSectionXml(file: string): Promise<string | null> {
     return urlset(cards.map((card) => ({ path: comparisonHref(card.a.slug, card.b.slug), changeFrequency: "weekly" as const, priority: card.popular ? 0.7 : 0.5 })));
   }
   if (file === "skills.xml") {
-    const tags = await directoryTags();
+    // Only tags a listed agent has a real skill for: `directoryTags` requires a
+    // populated skill row and at least one listed (set-up, not revoked) agent.
+    const tags = await directoryTags(SITEMAP_URL_LIMIT);
     return urlset(tags.map((tag) => ({ path: agentsSkillHref(tag.slug), changeFrequency: "daily" as const, priority: 0.6 })));
   }
   if (file === "library.xml") {
@@ -135,7 +156,7 @@ export async function sitemapSectionXml(file: string): Promise<string | null> {
     const projects = await prisma.project.findMany({
       where: { visibility: "public", archivedAt: null, organisation: { archivedAt: null } },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      take: 50_000,
+      take: SITEMAP_URL_LIMIT,
       select: { slug: true, updatedAt: true, organisation: { select: { slug: true } } },
     });
     return urlset(projects.map((project) => ({ path: projectPath(projectRef(project.organisation.slug, project.slug)), lastModified: project.updatedAt, changeFrequency: "daily" as const, priority: 0.6 })));
@@ -163,6 +184,8 @@ export async function sitemapSectionXml(file: string): Promise<string | null> {
   const match = /^agents-([1-9][0-9]{0,5})\.xml$/.exec(file);
   if (match) {
     const page = Number(match[1]);
+    // `listedAgentWhere` is the one index-worthiness rule (tagline, About me and
+    // a populated skill, not revoked), shared with /agents and profile metadata.
     const agents = await prisma.agent.findMany({
       where: listedAgentWhere,
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],

@@ -132,13 +132,31 @@ export async function findScannedCheck(organisationId: string, userId: string, t
   return check ? { checkId: check.id, summary: readQuickScan(check.target.previewSummary), finished: check.postedAt !== null } : null;
 }
 
+/**
+ * Whether a fix was paid for on this site since its last quick scan (#security-rescan, 17 Nov): a finding unlocked,
+ * or moved to the app, after the quick scan ran. Then scanning again looks at the site afresh instead of reusing a
+ * quick scan from the last 10 minutes. True when it never had a quick scan.
+ */
+export async function fixPaidSinceQuickScan(target: { id: string; previewAt: Date | null }): Promise<boolean> {
+  if (!target.previewAt) return true;
+  const paid = await prisma.securityCheckResult.count({
+    where: {
+      check: { targetId: target.id },
+      OR: [{ unlockedAt: { gt: target.previewAt } }, { finding: { createdAt: { gt: target.previewAt } } }],
+    },
+  });
+  return paid > 0;
+}
+
 /** One of this person's scans in this workspace, with its site, for replacing its quick scan. */
 export async function findOwnScan(organisationId: string, userId: string, checkId: string) {
   const check = await prisma.securityCheck.findFirst({
     where: { id: checkId, organisationId, requestedById: userId },
-    select: { id: true, target: { select: { id: true, kind: true, value: true } } },
+    select: { id: true, target: { select: { id: true, kind: true, value: true, previewAt: true } } },
   });
-  return check ? { checkId: check.id, targetId: check.target.id, target: { kind: check.target.kind, value: check.target.value } } : null;
+  return check
+    ? { checkId: check.id, targetId: check.target.id, target: { id: check.target.id, kind: check.target.kind, value: check.target.value, previewAt: check.target.previewAt } }
+    : null;
 }
 
 async function findOrCreateTarget(organisationId: string, userId: string, target: ParsedTarget) {
@@ -247,8 +265,9 @@ export function parseSiteFilter(value: unknown): SiteFilter {
 /** The workspace's checks, newest first: the returning user's list on the Security page. */
 export async function listWorkspaceChecks(organisationId: string, userId: string, take = 20): Promise<WorkspaceCheckRow[]> {
   const rows = await prisma.securityCheck.findMany({
-    // Only the checks this person asked for: others in the workspace don't see them.
-    where: { organisationId, requestedById: userId },
+    // Only the checks this person asked for: others in the workspace don't see them. A scan followed by a
+    // rescan (#security-rescan) leaves the list: the site shows once, as its newest scan.
+    where: { organisationId, requestedById: userId, nextCheck: { is: null } },
     orderBy: { createdAt: "desc" },
     take,
     select: {

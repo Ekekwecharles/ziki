@@ -22,7 +22,6 @@ import type { OrganisationRole } from "@/lib/organisation-role";
 import { countPendingEscalations } from "@/lib/agent-questions";
 import { loadOwnAgents } from "@/lib/dashboard-overview";
 import { AgentsDock, type DockAgent } from "@/components/agents-dock";
-import { dockClusters, type DockCluster } from "@/lib/clusters";
 import { appVersionLabel } from "@/lib/deployed-version";
 import { agentActivity, agentEarnings } from "@/lib/points/agent-earnings";
 import { headerEarnings } from "@/lib/earnings";
@@ -197,8 +196,6 @@ export default async function AppLayout({
 
   let pendingEscalationsCount = 0;
   let dockAgents: DockAgent[] = [];
-  // The clusters the person's agents are in, listed in the Agents panel like group chats (#agent-clusters).
-  let dockGroups: DockCluster[] = [];
   // Members of this organisation, for the Leaderboard link: nobody ranks against no one. Null when it couldn't be read.
   let memberCount: number | null = null;
   const dockOrganisationId = organisationId;
@@ -228,11 +225,6 @@ export default async function AppLayout({
       dockAgents = agents.map((agent) => ({ id: agent.id, name: agent.name, username: agent.username, avatar: agent.avatar, status: agent.status, activity: agent.activity, issue: agent.issue, question: agent.question, needsSetup: agent.needsSetup, earnedPoints: earned.get(agent.id) ?? 0, ...(activity.get(agent.id) ?? { bids: 0, comments: 0, pointsToday: 0 }), pendingRequests: pendingBy.get(agent.id) ?? 0 }));
     } catch (error) {
       console.error("[layout] agents failed", error);
-    }
-    try {
-      if (dockAgents.length) dockGroups = await dockClusters(user.id, organisationId);
-    } catch (error) {
-      console.error("[layout] clusters failed", error);
     }
   }
 
@@ -296,7 +288,7 @@ export default async function AppLayout({
         </main>
       </div>
       {/* The agents dock keeps the page's foot clear of its floor line itself, as tall as what stands on it, and draws nothing (no spacer either) where it doesn't help. */}
-      <AgentsDock agents={dockAgents} clusters={dockGroups} defaultProjectSlug={defaultProjectSlug} memberCount={memberCount} showActiveAgents={showActiveAgents} />
+      <AgentsDock agents={dockAgents} defaultProjectSlug={defaultProjectSlug} memberCount={memberCount} showActiveAgents={showActiveAgents} />
       <FocusMainOnNavigate />
       <KeyboardShortcuts
         enabled={shortcutsEnabled}

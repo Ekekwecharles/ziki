@@ -180,7 +180,8 @@ describe("listWorkspaceChecks", () => {
     const rows = await listWorkspaceChecks("org1", "u1");
 
     const query = prismaMock.securityCheck.findMany.mock.calls[0][0];
-    expect(query.where).toEqual({ organisationId: "org1", requestedById: "u1" });
+    // A scan that was scanned again (#security-rescan) leaves the list, so each site shows once, as its newest scan.
+    expect(query.where).toEqual({ organisationId: "org1", requestedById: "u1", nextCheck: { is: null } });
     expect(query.orderBy).toEqual({ createdAt: "desc" });
     // A finding's id, severity, title and whether it is unlocked or moved (what the report page already shows its owner): never its description or how to fix it.
     expect(query.select.results).toEqual({ select: { id: true, severity: true, title: true, unlockedAt: true, findingId: true } });

@@ -3568,6 +3568,14 @@ enum SecurityCheckItemStatus {
   skipped
 }
 
+/// What a rescan's agent said about an earlier finding (#security-rescan, 17 Nov).
+enum SecurityRecheckState {
+  /// The problem is still there.
+  still_there
+  /// The problem is gone.
+  fixed
+}
+
 /// A website, server or repo a workspace wants checked (#security-checks).
 /// Ownership is proven once per target, not once per check.
 model SecurityTarget {
@@ -3635,10 +3643,18 @@ model SecurityCheck {
   postedAt       DateTime?
   startedAt      DateTime?
   finishedAt     DateTime?
+  /// A rescan (#security-rescan, 17 Nov): the check it follows. Its agents recheck that check's open
+  /// findings (still there or fixed) and look for new ones. Null for a first scan.
+  previousCheckId String?              @unique
+  previousCheck  SecurityCheck?        @relation("SecurityRescan", fields: [previousCheckId], references: [id], onDelete: SetNull)
+  /// The rescan that followed this check, if any. A check followed by a rescan leaves the scans list.
+  nextCheck      SecurityCheck?        @relation("SecurityRescan")
   createdAt      DateTime              @default(now())
   updatedAt      DateTime              @updatedAt
   items          SecurityCheckItem[]
   results        SecurityCheckResult[]
+  /// Earlier findings this check (a rescan) rechecked.
+  rechecked      SecurityCheckResult[] @relation("SecurityRecheckCheck")
 
   @@index([organisationId, createdAt])
   @@index([targetId, createdAt])
@@ -3669,6 +3685,8 @@ model SecurityCheckItem {
   createdAt        DateTime                @default(now())
   updatedAt        DateTime                @updatedAt
   results          SecurityCheckResult[]
+  /// A rescan's recheck part: the earlier findings its agent says are still there or fixed.
+  recheckResults   SecurityCheckResult[]   @relation("SecurityRecheckItem")
 
   @@index([checkId, status])
   @@index([agentId, status])
@@ -3698,11 +3716,25 @@ model SecurityCheckResult {
   unlockedAt  DateTime?
   /// When its finder was paid for it, once, after the unlock.
   payoutReleasedAt DateTime?
+  /// Rechecked by a rescan (#security-rescan, 17 Nov): the finding stays this row, so its unlock, price and any
+  /// issue it was moved to carry over and nothing is paid twice. The latest rescan's answer; null until one.
+  recheckState   SecurityRecheckState?
+  recheckedAt    DateTime?
+  /// The rescan that rechecked it last.
+  recheckCheckId String?
+  recheckCheck   SecurityCheck?     @relation("SecurityRecheckCheck", fields: [recheckCheckId], references: [id], onDelete: SetNull)
+  /// The rescan part that holds it to recheck; set when the rescan is planned.
+  recheckItemId  String?
+  recheckItem    SecurityCheckItem? @relation("SecurityRecheckItem", fields: [recheckItemId], references: [id], onDelete: SetNull)
+  /// What the rechecking agent saw, in a line.
+  recheckNote    String?
   createdAt   DateTime          @default(now())
 
   @@index([checkId, severity])
   @@index([checkId, unlockedAt])
   @@index([itemId])
+  @@index([recheckCheckId])
+  @@index([recheckItemId])
 }
 
 /// Status of a support thread raised about a stuck fix (#requests).

@@ -92,15 +92,27 @@ describe("cluster access", () => {
   it("lists cards without content, with the skills still missing, and hides archived clusters unless asked", async () => {
     db.cluster.findMany.mockResolvedValue([{ id: "c1", name: "Payments", purpose: "Harden payments", creatorAgentId: "creator",
       neededSkills: ["security", "testing"], lastActivityAt: new Date(), createdAt: new Date(0), _count: { posts: 2, blockers: 1 },
+      project: { name: "Web", slug: "web", organisation: { slug: "ziki" } }, posts: [{ title: "Refund retries", authorName: "Creator" }],
       members: [{ agentId: "creator", joinedAt: new Date(0), agent: { name: "Creator", ownerUserId: "owner-creator" } }] }]);
     db.clusterMember.findMany.mockResolvedValue([]);
     const { items } = await listClusters(viewerFor("outsider"));
-    expect(items[0]).toMatchObject({ id: "c1", taskCount: 2, openBlockers: 1, myStatus: null, missingSkills: ["testing"], archived: false });
+    expect(items[0]).toMatchObject({ id: "c1", taskCount: 2, openBlockers: 1, project: { name: "Web", path: "/ziki/web" }, lastTask: { title: "Refund retries" }, myStatus: null, missingSkills: ["testing"], archived: false });
     expect(items[0]).not.toHaveProperty("doc");
     expect(db.cluster.findMany.mock.calls[0][0].select).not.toHaveProperty("doc");
     expect(db.cluster.findMany.mock.calls[0][0].where).toHaveProperty("lastActivityAt");
     await listClusters(viewerFor("outsider"), { includeArchived: true });
     expect(db.cluster.findMany.mock.calls[1][0].where).not.toHaveProperty("lastActivityAt");
+  });
+
+  it("lists the whole organisation's clusters for everyone, not only one project's", async () => {
+    db.cluster.findMany.mockResolvedValue([]);
+    db.clusterMember.findMany.mockResolvedValue([]);
+    await listClusters(viewerFor("outsider"), { wholeOrganisation: true });
+    const where = db.cluster.findMany.mock.calls[0][0].where;
+    expect(where).toMatchObject({ organisationId: "org" });
+    expect(where).not.toHaveProperty("projectId");
+    await listClusters(viewerFor("outsider"));
+    expect(db.cluster.findMany.mock.calls[1][0].where).toMatchObject({ organisationId: "org", projectId: "project" });
   });
 });
 

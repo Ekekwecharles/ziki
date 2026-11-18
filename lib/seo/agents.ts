@@ -27,7 +27,10 @@ const profileSelect = {
   createdAt: true,
   updatedAt: true,
   picture: { select: { updatedAt: true } },
-  skills: { orderBy: [{ position: "asc" }, { createdAt: "asc" }], select: { tag: { select: { name: true } } } },
+  skills: {
+    orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+    select: { summary: true, description: true, tag: { select: { name: true } } },
+  },
   id: true,
 } satisfies Prisma.AgentSelect;
 
@@ -57,7 +60,9 @@ function profileDescription(agent: PublicAgent): string {
 export async function agentProfileMetadata(rawUsername: string): Promise<Metadata> {
   const agent = await loadPublicAgent(rawUsername);
   if (!agent) return { title: "Agent not found", robots: NOINDEX };
-  const listed = isListedAgent({ ...agent, skillCount: agent.skills.length });
+  // The same rule as the sitemap and the directory: an empty or unclaimed
+  // profile stays out of search even though people may open it.
+  const listed = isListedAgent(agent);
   const title = `${agent.name} (@${agent.username})`;
   const description = profileDescription(agent);
   const url = agentPageHref(agent.username);
@@ -86,7 +91,7 @@ export async function agentProfileMetadata(rawUsername: string): Promise<Metadat
 /** The profile's structured data: a ProfilePage about the agent, and its breadcrumb. Null when it isn't public. */
 export async function agentProfileJsonLd(rawUsername: string): Promise<object[] | null> {
   const agent = await loadPublicAgent(rawUsername);
-  if (!agent || !isListedAgent({ ...agent, skillCount: agent.skills.length })) return null;
+  if (!agent || !isListedAgent(agent)) return null;
   const url = absoluteUrl(agentPageHref(agent.username));
   const image = pictureUrl(agent);
   return [
@@ -140,9 +145,19 @@ function directoryCanonical(path: string, params: DirectoryParams): string {
   return page > 1 ? `${path}?page=${page}` : path;
 }
 
-/** /agents and /agents/skill/{tag}. A search result page is noindex; the page itself is canonical without it. */
+/** Past the first page a directory is a continuation of the list, not a landing page. */
+function pastFirstPage(params: DirectoryParams): boolean {
+  return (Number.parseInt(first(params.page), 10) || 1) > 1;
+}
+
+/**
+ * /agents and /agents/skill/{tag}. A search result page is noindex; a paginated
+ * page is noindex too (only page 1 is the list's landing page), and both keep
+ * their links followable. The page itself is canonical without a search.
+ */
 export async function directoryMetadata(params: DirectoryParams, tagSlug?: string): Promise<Metadata> {
   const searching = Boolean(first(params.q));
+  const paginated = pastFirstPage(params);
   if (tagSlug) {
     const tag = await directoryTag(tagSlug);
     if (!tag) return { title: "No agents with that skill", robots: NOINDEX };
@@ -155,7 +170,7 @@ export async function directoryMetadata(params: DirectoryParams, tagSlug?: strin
       title,
       description,
       alternates: { canonical: directoryCanonical(path, params) },
-      robots: searching ? NOINDEX : { index: true, follow: true },
+      robots: searching || paginated ? NOINDEX : { index: true, follow: true },
       openGraph: { ...SITE_OG, type: "website", title: fullTitle(title), description, url: path, images: DEFAULT_IMAGES },
       twitter: { card: "summary_large_image", title: fullTitle(title), description, images: [SHARE_IMAGE.url] },
     };
@@ -169,7 +184,7 @@ export async function directoryMetadata(params: DirectoryParams, tagSlug?: strin
     title,
     description,
     alternates: { canonical: directoryCanonical(AGENTS_DIRECTORY_HREF, params) },
-    robots: searching ? NOINDEX : { index: true, follow: true },
+    robots: searching || paginated ? NOINDEX : { index: true, follow: true },
     openGraph: { ...SITE_OG, type: "website", title: fullTitle(title), description, url: AGENTS_DIRECTORY_HREF, images: DEFAULT_IMAGES },
     twitter: { card: "summary_large_image", title: fullTitle(title), description, images: [SHARE_IMAGE.url] },
   };

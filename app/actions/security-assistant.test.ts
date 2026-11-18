@@ -198,9 +198,10 @@ describe("talkToSecurityAssistant (#security-checks, plan C3)", () => {
   });
 
   it("Replace: scans a site already in your scans again and saves the new result over the old one", async () => {
-    mocks.findOwnScan.mockResolvedValue({ checkId: "c1", targetId: "t1", target: { kind: "website", value: "settle.ng" } });
+    // Never quick-scanned before, so it looks afresh rather than reusing a quick scan from the last 10 minutes.
+    mocks.findOwnScan.mockResolvedValue({ checkId: "c1", targetId: "t1", target: { id: "t1", kind: "website", value: "settle.ng", previewAt: null } });
     const answer = await replaceScan("c1");
-    expect(mocks.preview).toHaveBeenCalledWith("settle.ng", { visitor: "user:u1" });
+    expect(mocks.preview).toHaveBeenCalledWith("settle.ng", { visitor: "user:u1", fresh: true });
     expect(mocks.saveQuickScan).toHaveBeenCalledWith("t1", expect.objectContaining({ total: 2 }));
     expect(mocks.addTargetAndCheck).not.toHaveBeenCalled();
     expect(answer).toMatchObject({ ok: true, summary: { total: 2 } });

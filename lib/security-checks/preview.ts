@@ -116,15 +116,17 @@ export async function previewScan(
     network = realPreviewNetwork,
     now = Date.now(),
     limited = scanLimitsEnabled(),
-  }: { visitor: string; network?: PreviewNetwork; now?: number; limited?: boolean },
+    fresh = false,
+  }: { visitor: string; network?: PreviewNetwork; now?: number; limited?: boolean; fresh?: boolean },
 ): Promise<PreviewResult> {
   const parsed = parseSecurityTarget(link);
   if (!parsed.ok) return { ok: false, reason: parsed.error };
   const { kind, value } = parsed.target;
 
+  // `fresh` skips the 10-minute reuse: a fix was paid for since the last look (#security-rescan, 17 Nov), so look again.
   const cacheKey = `${kind}:${value}`;
   const cached = cache.get(cacheKey);
-  if (cached && now - cached.at < PREVIEW_CACHE_MS) return cached.result;
+  if (!fresh && cached && now - cached.at < PREVIEW_CACHE_MS) return cached.result;
 
   // The per-visitor limit counts only while scan limits are on (14 Nov plan: off for now, not removed).
   if (limited) {

@@ -6,7 +6,8 @@ import { currentOrganisationAccess } from "@/lib/organisation-access";
 import { checkRateLimit, RATE_LIMIT_MESSAGE } from "@/lib/rate-limit";
 import { OWNERS_ONLY_MESSAGE } from "@/lib/security-checks";
 import { parseSecurityTarget, PRIVATE_TARGET_ERROR, targetAddress } from "@/lib/security-checks/target";
-import { addTargetAndCheck, findOwnScan, findScannedCheck, refusedMessage, removeOwnScan, saveQuickScan } from "@/lib/security-checks/entry";
+import { addTargetAndCheck, findOwnScan, findScannedCheck, fixPaidSinceQuickScan, refusedMessage, removeOwnScan, saveQuickScan } from "@/lib/security-checks/entry";
+import { rescanQuote, startRescan, type RescanOutcome, type RescanQuote } from "@/lib/security-checks/rescan";
 import { previewScan } from "@/lib/security-checks/preview";
 import { summarisePreview, type PreviewSummary } from "@/lib/security-checks/preview-summary";
 import { withSiteAddress } from "@/lib/security-checks/site-address";
@@ -57,12 +58,56 @@ export async function replaceScan(checkId: string): Promise<{ ok: true; summary:
   if (!access.admin) return { ok: false, error: OWNERS_ONLY_MESSAGE };
   const scan = typeof checkId === "string" ? await findOwnScan(access.organisationId, user.id, checkId) : null;
   if (!scan) return { ok: false, error: "That scan isn't in your scans." };
-  const result = await previewScan(targetAddress(scan.target), { visitor: `user:${user.id}` });
+  // A quick scan from the last 10 minutes is reused, unless a fix was paid for since (#security-rescan).
+  const fresh = await fixPaidSinceQuickScan(scan.target);
+  const result = await previewScan(targetAddress(scan.target), { visitor: `user:${user.id}`, fresh });
   if (!result.ok) return { ok: false, error: result.reason };
   const summary = await withSiteAddress(summarisePreview(result));
   await saveQuickScan(scan.targetId, summary);
   revalidatePath("/security");
   return { ok: true, summary };
+}
+
+/** What "Scan again" costs and covers, for its confirm (#security-rescan). Charges nothing. */
+export async function rescanCost(checkId: string): Promise<RescanQuote> {
+  const user = await requireUser();
+  const access = await currentOrganisationAccess(user.id, user.role);
+  if (!access.organisationId) return { ok: false, error: NO_WORKSPACE };
+  if (!access.admin) return { ok: false, error: OWNERS_ONLY_MESSAGE };
+  if (typeof checkId !== "string") return { ok: false, error: "That scan isn't in your scans." };
+  return rescanQuote(access.organisationId, user.id, checkId);
+}
+
+/**
+ * Scan again with agents (#security-rescan, 17 Nov): pays 10 Ziks, starts a follow-up scan whose agents recheck the
+ * earlier findings and look for new ones, and runs the quick scan again. The follow-up starts after this answers.
+ */
+export async function rescanSite(checkId: string): Promise<RescanOutcome> {
+  const user = await requireUser();
+  const access = await currentOrganisationAccess(user.id, user.role);
+  if (!access.organisationId) return { ok: false, reason: "not_found", error: NO_WORKSPACE };
+  if (!access.admin) return { ok: false, reason: "not_found", error: OWNERS_ONLY_MESSAGE };
+  if (typeof checkId !== "string") return { ok: false, reason: "not_found", error: "That scan isn't in your scans." };
+  const outcome = await startRescan(access.organisationId, user.id, checkId);
+  if (!outcome.ok) return outcome;
+  const next = outcome.checkId;
+  const organisationId = access.organisationId;
+  after(async () => {
+    // The quick scan is part of scanning again (reused for 10 minutes unless a fix was paid for since);
+    // a failure here doesn't stop the agents.
+    try {
+      const scan = await findOwnScan(organisationId, user.id, next);
+      if (scan) {
+        const result = await previewScan(targetAddress(scan.target), { visitor: `user:${user.id}`, fresh: await fixPaidSinceQuickScan(scan.target) });
+        if (result.ok) await saveQuickScan(scan.targetId, await withSiteAddress(summarisePreview(result)));
+      }
+    } catch {
+      // The report still shows the last quick scan.
+    }
+    await kickCheck(prisma, next);
+  });
+  revalidatePath("/security");
+  return outcome;
 }
 
 /** A site's saved chat, as the card shows it, and whether its agents' report is posted ("See results" rather than "See progress"). */

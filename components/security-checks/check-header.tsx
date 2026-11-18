@@ -7,6 +7,7 @@ import { CheckActivity, type CheckPhase } from "@/components/security-checks/che
 import { statusClass, substatusClass } from "@/lib/labels";
 import { CHECK_STATUS_LABEL, FINISHED_CHECK_STATUSES } from "@/lib/security-checks";
 import type { CheckReport } from "@/lib/security-checks/report";
+import { firstSentence } from "@/lib/security-checks/short-line";
 
 /** Ziki's issue status colours, by meaning: waiting on someone like Requires confirmation, working like In progress, finished like Live. */
 const STATUS_CLASS: Record<CheckReport["status"], string> = {
@@ -71,25 +72,35 @@ export function CheckHeader({ report }: { report: CheckReport }) {
 
 function FindingsSummary({ report }: { report: Extract<CheckReport, { posted: true }> }) {
   const critical = report.counts.critical;
+  // Any problem at all gets the warning look, even a single low one (17 Nov, Hamzat: "something scary").
+  const warn = report.total > 0;
+  // Every finding not already in the app, a rescan's earlier ones still there included (18 Nov, Tolu).
   const remaining = report.findings.filter((finding) => !finding.fix);
   const criticalRemaining = remaining.filter((finding) => finding.severity === "critical");
   const selection = criticalRemaining.length ? criticalRemaining : remaining;
   const fixLabel = criticalRemaining.length === 1 ? "Fix the critical one"
     : criticalRemaining.length > 1 ? "Fix critical findings" : "Fix remaining findings";
-  const fixHref = `/security/checks/${encodeURIComponent(report.checkId)}/fix?ids=${selection.map(({ id }) => encodeURIComponent(id)).join(",")}`;
+  // Back to this page with them ticked and the fix panel open, under the Deeper scan.
+  const fixHref = `/security/checks/${encodeURIComponent(report.checkId)}?fix=${selection.map(({ id }) => encodeURIComponent(id)).join(",")}#fix-panel`;
 
   return (
-    <section aria-label="Findings summary" className={`flex flex-col gap-4 rounded-[20px] border p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6 ${critical ? "border-zk-bad-fg/30 bg-zk-bad-bg/50" : "border-zk-border bg-zk-surface"}`}>
+    <section aria-label="Findings summary" className={`flex flex-col gap-4 rounded-[20px] border p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6 ${warn ? "border-2 border-red-400 bg-red-100" : "border-zk-border bg-zk-surface"}`}>
       <div className="min-w-0 space-y-2">
-        <h2 className={`text-lg font-bold sm:text-xl ${critical ? "text-zk-bad-fg" : "text-zk-text"}`}>
+        <h2 className={`text-lg font-bold sm:text-xl ${warn ? "text-red-800" : "text-zk-text"}`}>
           {report.total === 0 ? "No security problems found" : `${report.total} security ${report.total === 1 ? "problem" : "problems"} found${critical ? `, ${critical} of them critical` : ""}`}
         </h2>
-        {report.summary ? <p className="break-words text-sm text-zk-text2 sm:text-base">{report.summary}</p> : null}
+        {report.fixed.length ? (
+          <p className="m-0 text-sm font-semibold text-zk-ok-fg">
+            {report.fixed.length} {report.fixed.length === 1 ? "problem" : "problems"} from the last scan fixed
+          </p>
+        ) : null}
+        {report.summary ? <p className={`break-words text-sm sm:text-base ${warn ? "text-red-950" : "text-zk-text2"}`}>{firstSentence(report.summary)}</p> : null}
         {report.total > 0 ? (
           <ul aria-label="Findings by severity" className="flex flex-wrap gap-2">
             {SECURITY_SEVERITIES.filter((severity) => report.counts[severity] > 0).map((severity) => (
               <li key={severity} className={`security-severity security-severity--${severity} rounded-full px-3 py-1 text-xs font-bold`}>
-                {report.counts[severity]} {SEVERITY_LABEL[severity].toLowerCase()}
+                {/* "1 critical threat", "3 low threats": the summary speaks of threats; the list below just says the level. */}
+                {report.counts[severity]} {SEVERITY_LABEL[severity].toLowerCase()} {report.counts[severity] === 1 ? "threat" : "threats"}
               </li>
             ))}
           </ul>

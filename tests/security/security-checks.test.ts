@@ -2,11 +2,28 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { inflateSync } from "node:zlib";
 import { Prisma } from "@prisma/client";
 
-const db = vi.hoisted(() => ({
-  securityCheck: { findFirst: vi.fn() },
-  securityCheckResult: { findMany: vi.fn(), findUnique: vi.fn() },
-}));
+const db = vi.hoisted(() => {
+  const fake = {
+    securityCheck: { findFirst: vi.fn(), create: vi.fn() },
+    securityCheckResult: { findMany: vi.fn(), findUnique: vi.fn() },
+    $transaction: vi.fn(),
+  };
+  fake.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn(fake));
+  return fake;
+});
 vi.mock("@/lib/prisma", () => ({ prisma: db }));
+
+// The wallet, for Scan again's payment (#security-rescan): what it can spend and the rows it writes.
+const coins = vi.hoisted(() => {
+  class CoinError extends Error {
+    constructor(public code: string, message: string) {
+      super(message);
+    }
+  }
+  return { CoinError, appendRows: vi.fn(), lockUser: vi.fn(), walletBalance: vi.fn(), assertCanSpendOnSecurity: vi.fn(), loanState: vi.fn() };
+});
+vi.mock("@/lib/coins/ledger", () => ({ CoinError: coins.CoinError, appendRows: coins.appendRows, lockUser: coins.lockUser, walletBalance: coins.walletBalance }));
+vi.mock("@/lib/coins/loan", () => ({ assertCanSpendOnSecurity: coins.assertCanSpendOnSecurity, loanState: coins.loanState }));
 
 const session = vi.hoisted(() => ({ userId: "owner", organisationId: "org1" }));
 vi.mock("@/lib/auth-helpers", () => ({ requireUser: async () => ({ id: session.userId, role: "user" }) }));
@@ -22,6 +39,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { fixOf, loadCheckReport } from "@/lib/security-checks/report";
+import { RESCAN_PRICE_ZIKS, startRescan } from "@/lib/security-checks/rescan";
 import { GET as downloadReportPdf } from "@/app/(app)/security/checks/[id]/report.pdf/route";
 import {
   CHECK_STATUS_LABEL,
@@ -264,7 +282,7 @@ describe("what a client sees of a check (12 and 14 Nov plans, part S)", () => {
     const [crit, high, low] = report.findings;
     expect(crit).toMatchObject({ title: "crit title", howToFix: "crit fix", fix: { bucket: "fixing", issue: { number: 150, href: "/acme/web/150" } } });
     // Not paid for: shown in full, without how to fix, and without the agent that found it.
-    expect(high).toEqual({ id: "high", partId: "i3", severity: "high", area: "Headers", title: "high title", description: "high description", howToFix: null, fix: null });
+    expect(high).toEqual({ id: "high", partId: "i3", severity: "high", area: "Headers", title: "high title", description: "high description", howToFix: null, fix: null, price: 3, checkId: "check1", recheck: null, recheckNote: null });
     expect(low).toMatchObject({ area: "CORS", howToFix: null });
     expect(report.counts).toEqual({ critical: 1, high: 1, medium: 0, low: 1 });
     expect(report.clearParts).toEqual(["Cookies"]);
@@ -385,6 +403,60 @@ describe("what a client sees of a check (12 and 14 Nov plans, part S)", () => {
     // A deleted issue doesn't count: the mark then links to the private finding.
     expect(finding(bug("resolved", true), { status: "open", isDeleted: false })).toMatchObject({ bucket: "fixing", issue: null });
     expect(finding(null, { status: "rejected", isDeleted: false })).toMatchObject({ bucket: "closed" });
+  });
+});
+
+describe("scanning again (#security-rescan, 17 Nov)", () => {
+  const finished = {
+    id: "check0",
+    organisationId: "org1",
+    requestedById: "owner",
+    targetId: "t1",
+    postedAt: new Date("2026-11-16T10:00:00Z"),
+    nextCheck: null,
+    target: { value: "settle.ng", verifiedAt: null },
+  };
+  beforeEach(() => {
+    db.securityCheck.findFirst.mockReset();
+    db.securityCheck.create.mockReset();
+    coins.appendRows.mockReset();
+    coins.assertCanSpendOnSecurity.mockReset();
+    coins.walletBalance.mockResolvedValue(3);
+    coins.loanState.mockResolvedValue({ canBorrow: true, overdraft: 0 });
+  });
+
+  it("charges 10 Ziks and starts a follow-up of the finished scan, in one step", async () => {
+    db.securityCheck.findFirst.mockResolvedValue(finished);
+    db.securityCheck.create.mockResolvedValue({ id: "rescan1" });
+
+    expect(await startRescan("org1", "owner", "check0")).toEqual({ ok: true, checkId: "rescan1" });
+
+    expect(RESCAN_PRICE_ZIKS).toBe(10);
+    expect(db.securityCheck.create.mock.calls[0]![0].data).toMatchObject({ previousCheckId: "check0", targetId: "t1", free: false, priceCoins: 10, status: "queued" });
+    expect(coins.appendRows.mock.calls[0]![1]).toEqual([
+      { account: "wallet", userId: "owner", kind: "check_payment", amount: -10, sourceKey: "rescan:rescan1:wallet" },
+      { account: "revenue", kind: "check_payment", amount: 10, sourceKey: "rescan:rescan1:revenue" },
+    ]);
+  });
+
+  it("charges nothing and starts nothing when the wallet can't cover it, and says whether the loan is open", async () => {
+    db.securityCheck.findFirst.mockResolvedValue(finished);
+    coins.assertCanSpendOnSecurity.mockRejectedValue(new coins.CoinError("insufficient_ziks", "short"));
+
+    expect(await startRescan("org1", "owner", "check0")).toMatchObject({ ok: false, reason: "insufficient_ziks", needed: 10, balance: 3, canBorrow: true });
+    expect(db.securityCheck.create).not.toHaveBeenCalled();
+    expect(coins.appendRows).not.toHaveBeenCalled();
+  });
+
+  it("follows only the newest finished scan: one still being checked, or already scanned again, is refused without a charge", async () => {
+    db.securityCheck.findFirst.mockResolvedValueOnce({ ...finished, postedAt: null });
+    expect(await startRescan("org1", "owner", "check0")).toMatchObject({ ok: false, reason: "not_finished" });
+    db.securityCheck.findFirst.mockResolvedValueOnce({ ...finished, nextCheck: { id: "rescan1" } });
+    expect(await startRescan("org1", "owner", "check0")).toMatchObject({ ok: false, reason: "already_rescanned", checkId: "rescan1" });
+    db.securityCheck.findFirst.mockResolvedValueOnce(null);
+    expect(await startRescan("org1", "owner", "someone-elses")).toMatchObject({ ok: false, reason: "not_found" });
+    expect(coins.assertCanSpendOnSecurity).not.toHaveBeenCalled();
+    expect(db.securityCheck.create).not.toHaveBeenCalled();
   });
 });
 

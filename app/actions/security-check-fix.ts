@@ -38,7 +38,6 @@ export async function fixSecurityCheck(input: unknown): Promise<FixOutcome> {
     revalidatePath("/security");
     const reportPath = `/security/checks/${encodeURIComponent(selection.data.checkId)}`;
     revalidatePath(reportPath);
-    revalidatePath(`${reportPath}/fix`);
     revalidatePath("/[org]/[project]", "layout");
   }
   return outcome;

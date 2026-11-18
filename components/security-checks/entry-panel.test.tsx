@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 vi.mock("@/app/actions/security-checks", () => ({ unlockSecurityFindings: vi.fn() }));
 vi.mock("@/app/actions/security-assistant", () => ({ talkToSecurityAssistant: vi.fn() }));
+// Scan again (#security-rescan) can offer the one-time loan; its server action isn't used here.
+vi.mock("@/app/actions/ziks-loan", () => ({ borrowZiks: vi.fn() }));
 vi.mock("next/navigation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("next/navigation")>()),
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),

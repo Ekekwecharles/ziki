@@ -10,7 +10,8 @@ import { ToolbarFilterMenu } from "@/components/toolbar-filter-menu";
 import { PaginationControls } from "@/components/pagination-controls";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
-import { removeScan, replaceScan } from "@/app/actions/security-assistant";
+import { removeScan } from "@/app/actions/security-assistant";
+import { useRescan } from "./use-rescan";
 import { KindIcon } from "./entry-box";
 import "@/components/security-finding.css";
 import { SecurityChat, chatLeftOpen, keepChatOpen, startNewChat } from "./security-chat";
@@ -129,7 +130,9 @@ export function ScanList({
   const router = useRouter();
   const confirm = useConfirm();
   const toast = useToast();
-  const [busy, start] = useTransition();
+  const [removing, start] = useTransition();
+  const { rescan, pending: rescanning } = useRescan();
+  const busy = removing || rescanning;
   const filter: Filter = ALL_FILTERS.some(({ id }) => id === show) ? (show as Filter) : "all";
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -181,17 +184,15 @@ export function ScanList({
     setSort((now) => (now.key === key ? { key, dir: now.dir === "asc" ? "desc" : "asc" } : { key, dir: key === "target" ? "asc" : "desc" }));
   }
 
-  function scanAgain(ids: string[]) {
-    start(async () => {
-      let failed = 0;
-      for (const id of ids) {
-        const answer = await replaceScan(id);
-        if (!answer.ok) failed += 1;
-      }
-      setPicked(new Set());
-      router.refresh();
-      toast(failed ? `${ids.length - failed} scanned again; ${failed} couldn't be.` : ids.length === 1 ? "Scanned again." : `${ids.length} targets scanned again.`, failed ? "error" : undefined);
-    });
+  // Scan again with agents (#security-rescan): paid, after one confirm, for scans whose report is in.
+  function scanAgain(rows: WorkspaceCheckRow[]) {
+    const finished = rows.filter((row) => row.posted);
+    if (!finished.length) {
+      toast(rows.length === 1 ? "Scan this again once its report is in." : "None of these has its report in yet.", "error");
+      return;
+    }
+    setPicked(new Set());
+    rescan(finished.map((row) => row.id));
   }
 
   async function remove(rows: WorkspaceCheckRow[]) {
@@ -244,7 +245,7 @@ export function ScanList({
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => scanAgain(ticked.map((check) => check.id))}
+                onClick={() => scanAgain(ticked)}
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-zk-border bg-zk-surface px-3 text-[13px] font-medium text-zk-text2 hover:bg-zk-chip hover:text-zk-text disabled:opacity-60"
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8" /><path d="M21 3v5h-5" /></svg>
@@ -327,7 +328,7 @@ export function ScanList({
               highlighted={highlightId === check.id}
               ticked={picked.has(check.id)}
               onTick={() => toggle(check.id)}
-              onScanAgain={() => scanAgain([check.id])}
+              onScanAgain={() => scanAgain([check])}
               onRemove={() => remove([check])}
               busy={busy}
             />
@@ -445,7 +446,9 @@ function TargetRow({
   return (
     <div
       role="row"
-      className={`group relative grid grid-cols-[20px_minmax(0,1fr)_auto_28px] items-center gap-x-2 sm:gap-x-3 md:grid-cols-[20px_minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.1fr)_minmax(0,1fr)_32px] border-b border-zk-divider px-3 py-3 last:border-b-0 hover:bg-zk-tint/50 sm:px-5 ${ticked || highlighted ? "bg-zk-tint/40" : ""}`}
+      // While its "…" menu is open the row is lifted above the rows below (17 Nov): each row's cells sit at z-10,
+      // so without this the next rows' boxes, links and "…" buttons showed through the open menu.
+      className={`group relative has-[[aria-expanded=true]]:z-30 grid grid-cols-[20px_minmax(0,1fr)_auto_28px] items-center gap-x-2 sm:gap-x-3 md:grid-cols-[20px_minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.1fr)_minmax(0,1fr)_32px] border-b border-zk-divider px-3 py-3 last:border-b-0 hover:bg-zk-tint/50 sm:px-5 ${ticked || highlighted ? "bg-zk-tint/40" : ""}`}
     >
       <span role="cell" className="relative z-10 flex justify-center">
         <input type="checkbox" aria-label={`Tick ${check.value}`} checked={ticked} onChange={onTick} className="h-4 w-4 accent-electric-blue-strong" />
@@ -475,7 +478,10 @@ function TargetRow({
       <span role="cell" className="hidden md:block">
         <span className="inline-flex rounded-md border border-zk-border px-1.5 py-0.5 text-xs text-zk-text2">{TARGET_KIND_LABEL[check.kind]}</span>
       </span>
-      <span role="cell" className="flex items-center gap-0.5 md:gap-1">
+      <span role="cell" className="flex items-center">
+        {/* Above the row's covering link, so every box's hover says what it counts (17 Nov): under it, only the faded
+            zero boxes (opacity lifts them) showed theirs. Still opens the scan; out of the Tab order, the row link is the stop. */}
+        <Link href={href} tabIndex={-1} className="relative z-10 flex items-center gap-0.5 md:gap-1">
         {nothing ? (
           <NoProblems />
         ) : found.length ? (
@@ -492,6 +498,7 @@ function TargetRow({
         ) : (
           <span className="text-xs text-zk-muted">Checking…</span>
         )}
+        </Link>
       </span>
       <span role="cell" className="hidden text-xs text-zk-muted md:block">
         <LocalTime date={lastScanned(check)} />
